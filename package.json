@@ -1,0 +1,11 @@
+{
+  "name": "diffotator",
+  "version": "0.1.0",
+  "description": "Fork-style git diff viewer in the browser, with line annotations that get sent back to your Claude Code session.",
+  "bin": { "diffotator": "bin/diffotator.js" },
+  "main": "src/server.js",
+  "type": "commonjs",
+  "engines": { "node": ">=18" },
+  "files": ["bin", "src", "web", "claude"],
+  "license": "MIT"
+}
