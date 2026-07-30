@@ -66,6 +66,11 @@
          They arrive as markdown your agent acts on.</p>
     </div>
     <div class="card">
+      <h3>Fires on its own</h3>
+      <p>A Stop hook opens the review when a turn leaves real changes — so review happens even
+         when you forget to ask for it. Silent otherwise.</p>
+    </div>
+    <div class="card">
       <h3>Nothing to install into your repo</h3>
       <p>One Node process, no dependencies, no config, no service. It reads git and exits when
          you're done.</p>
@@ -132,6 +137,15 @@ authority treats it as a post-tax adjustment — pin that with a test.</code></p
       </tbody>
     </table>
   </div>
+
+  <h3>Or let it fire on its own</h3>
+  <p class="dim" style="font-size:15px;max-width:680px">
+    <code>diffotator hook --install</code> adds a Stop hook, so a review opens whenever a turn
+    leaves real changes. Blocking comments return
+    <code>{"decision":"block","reason":…}</code> — the agent is sent back to work with your review
+    as the reason. It stays silent on a clean tree, on small turns, and on a tree you already
+    reviewed.
+  </p>
 </section>
 
 <section class="wrap">

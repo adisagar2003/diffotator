@@ -26,6 +26,26 @@ diffotator -C ../other-repo
 From Claude Code: `/diffotator`. The CLI blocks until you submit; whatever it prints
 on stdout becomes the agent's next input.
 
+## Automatic review (Stop hook)
+
+A review tool you have to remember to run reviews nothing. Install the hook and
+every turn that leaves real changes gets looked at:
+
+```sh
+diffotator hook --install     # adds a Stop hook to ~/.claude/settings.json
+diffotator hook --uninstall   # removes it
+```
+
+Leaving blocking comments returns `{"decision":"block","reason":"<your review>"}`,
+which sends the agent back to work with your feedback as the reason. Approving lets
+the turn end.
+
+The hard part is *not* firing. It stays silent when the tree is clean, when fewer
+than `DIFFOTATOR_HOOK_MIN_FILES` (default 3) files changed, when the tree is
+byte-identical to what you last reviewed, and when the harness says a Stop hook
+already forced a continuation. `DIFFOTATOR_HOOK=off` disables it without
+uninstalling.
+
 | You do | Agent gets |
 |---|---|
 | **Send feedback** | `# Code review feedback` — grouped by file, blocking comments called out |
@@ -59,7 +79,12 @@ tab so you can comment on code the diff never touched.
 Click any line number to comment. Labels follow
 [Conventional Comments](https://conventionalcomments.org) — `suggestion`, `nit`,
 `question`, `issue`, `praise`, `thought`, `note`, `todo`, `chore` — plus a blocking
-flag and an optional suggested-code block. Drafts survive a reload (localStorage).
+flag and an optional suggested-code block.
+
+Unsent comments and viewed state persist to `~/.local/share/diffotator` and survive
+across runs. They deliberately do *not* live in `localStorage`: that is scoped to the
+origin **including the port**, and every run binds a new random port, so drafts
+written by one session were invisible to the next.
 
 ### Keys
 

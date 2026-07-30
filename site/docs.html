@@ -25,6 +25,7 @@
     <a href="#requirements">Requirements</a>
     <a href="#install">Install</a>
     <a href="#claude-code">Claude Code</a>
+    <a href="#hook">Automatic review</a>
     <div>Using it</div>
     <a href="#scopes">Scopes</a>
     <a href="#loop">The review loop</a>
@@ -90,6 +91,52 @@ session is submitted, which can exceed the Bash timeout)…</code></pre>
     </div>
   </section>
 
+  <section id="hook">
+    <h2>Automatic review (Stop hook)</h2>
+    <p>A review tool you have to remember to run reviews nothing. Install the hook and every turn
+       that leaves real changes gets looked at, without you typing anything:</p>
+<pre><code>$ diffotator hook --install
+Installed the diffotator Stop hook in ~/.claude/settings.json
+Reviews open when a turn leaves 3+ changed files.</code></pre>
+    <p>It appends to <code>hooks.Stop</code> in <code>~/.claude/settings.json</code>, leaving any
+       hooks you already have in place, and writes a
+       <code>settings.json.diffotator-backup</code> first.
+       <code>diffotator hook --uninstall</code> removes just its own entry.</p>
+
+    <h3>What the agent gets</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th style="width:200px">You press</th><th>Hook returns</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td><b>Send feedback</b></td><td class="mono">{"decision":"block","reason":…}</td>
+              <td>Turn is blocked; your review becomes the reason and the agent keeps working</td></tr>
+          <tr><td><b>Approve</b></td><td class="mono">{}</td><td>Turn ends normally</td></tr>
+          <tr><td><b>Close</b></td><td class="mono">{}</td><td>Turn ends; nothing sent</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>When it stays quiet</h3>
+    <p>This is the part that decides whether the hook is useful or maddening. A review only opens
+       if it survives all four gates:</p>
+    <ul class="plain">
+      <li><b>Clean tree</b> — nothing uncommitted, nothing to review.</li>
+      <li><b>Below threshold</b> — fewer than <code>DIFFOTATOR_HOOK_MIN_FILES</code> changed files
+          (default <b>3</b>). A one-line turn is noise.</li>
+      <li><b>Unchanged since your last review</b> — the working tree is fingerprinted by content, so
+          approving a review and letting the agent add one more sentence will not pop the browser
+          back open. Editing a file in place <em>does</em> count as new work, even though the file
+          count is identical.</li>
+      <li><b>Loop guard</b> — if the harness reports that a Stop hook already forced a
+          continuation, this one allows immediately.</li>
+    </ul>
+    <div class="note">
+      <b>Tuning it.</b> <code>DIFFOTATOR_HOOK_MIN_FILES=1</code> to review everything,
+      <code>DIFFOTATOR_HOOK=off</code> to disable without uninstalling, and
+      <code>DIFFOTATOR_DEBUG=1</code> to print the gate decision to stderr.
+    </div>
+  </section>
+
   <section id="scopes">
     <h2>Scopes</h2>
     <p>A <b>scope</b> is what you're reviewing. The sidebar offers three, and everything downstream —
@@ -133,8 +180,13 @@ session is submitted, which can exceed the Bash timeout)…</code></pre>
     <p>Viewed files dim with a ✓ and the header tracks
        <code>12/56 viewed +2,341 −187</code>. Viewed state is kept <b>per scope</b> — having read a
        file in the working tree isn't the same as having read it in a commit.</p>
-    <p>Progress and unsent comments survive a reload; they're kept in <code>localStorage</code>,
-       keyed to the repository.</p>
+    <p>Progress and unsent comments persist to <code>~/.local/share/diffotator</code> and survive
+       across separate runs, not just reloads.</p>
+    <div class="note">
+      <b>Why not <code>localStorage</code>?</b> It is scoped to the origin <em>including the
+      port</em>, and every run binds a fresh random port — so drafts written by one session were
+      invisible to the next. Disk also works when the browser is on a different machine.
+    </div>
   </section>
 
   <section id="comments">
@@ -208,7 +260,10 @@ session is submitted, which can exceed the Bash timeout)…</code></pre>
 
   <section id="cli">
     <h2>CLI</h2>
-<pre><code>diffotator [review] [options]</code></pre>
+<pre><code>diffotator [review] [options]      <span class="c"># open a review now</span>
+diffotator hook                    <span class="c"># Stop-hook mode (hook JSON on stdin)</span>
+diffotator hook --install          <span class="c"># add the Stop hook</span>
+diffotator hook --uninstall        <span class="c"># remove it</span></code></pre>
     <div class="tablewrap">
       <table>
         <thead><tr><th style="width:210px">Flag</th><th>Meaning</th></tr></thead>
@@ -336,8 +391,18 @@ Address every comment above…</code></pre>
        sending anything.</p>
 
     <h3>My comments disappeared</h3>
-    <p>Drafts are kept in <code>localStorage</code> per repository and cleared once a review is
-       submitted. A different browser or profile won't see them.</p>
+    <p>Drafts live in <code>~/.local/share/diffotator/drafts</code>, keyed by repository, and are
+       cleared once a review is submitted. Override the location with
+       <code>DIFFOTATOR_DATA_DIR</code>.</p>
+
+    <h3>The hook keeps opening a browser</h3>
+    <p>Raise <code>DIFFOTATOR_HOOK_MIN_FILES</code>, or set <code>DIFFOTATOR_HOOK=off</code>. Run
+       with <code>DIFFOTATOR_DEBUG=1</code> to see why the gate fired.</p>
+
+    <h3>The hook never opens</h3>
+    <p><code>DIFFOTATOR_DEBUG=1 diffotator hook &lt;&lt;&lt; \'{"cwd":"$PWD"}\'</code> prints the
+       gate decision — usually <code>clean-tree</code>, <code>below-threshold</code> or
+       <code>unchanged-since-review</code>.</p>
   </section>
 
   </main>

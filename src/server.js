@@ -5,6 +5,7 @@ const path = require("path");
 const { URL } = require("url");
 const G = require("./git");
 const { render } = require("./feedback");
+const D = require("./drafts");
 
 const WEB = path.join(__dirname, "..", "web");
 const MIME = {
@@ -82,7 +83,12 @@ function createServer({ root, finish, title }) {
       // ---- api ----------------------------------------------------------
       if (p === "/api/overview") {
         const ov = await G.overview(root);
-        return json(res, 200, { ...ov, title });
+        return json(res, 200, { ...ov, title, draft: D.loadDraft(root) });
+      }
+
+      if (p === "/api/draft" && req.method === "POST") {
+        D.saveDraft(root, await readBody(req));
+        return json(res, 200, { ok: true });
       }
 
       if (p === "/api/commits") {
@@ -132,6 +138,7 @@ function createServer({ root, finish, title }) {
       if (p === "/api/submit" && req.method === "POST") {
         const payload = await readBody(req);
         const out = render({ ...payload, repo: path.basename(root) });
+        D.clearDraft(root);
         json(res, 200, { ok: true });
         // Let the browser paint its confirmation screen before we tear down.
         setTimeout(() => finish(out, payload.decision || "annotated"), 400);

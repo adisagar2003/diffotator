@@ -2,14 +2,20 @@
 "use strict";
 const { execFile } = require("child_process");
 const path = require("path");
+const fs = require("fs");
+const os = require("os");
 const G = require("../src/git");
 const { createServer } = require("../src/server");
+const hook = require("../src/hook");
 
 const HELP = `
 diffotator — Fork-style git review in the browser, annotations back to your agent.
 
 Usage:
-  diffotator [review] [options]
+  diffotator [review] [options]      Open a review now
+  diffotator hook                    Stop-hook mode (reads hook JSON on stdin)
+  diffotator hook --install          Add the Stop hook to ~/.claude/settings.json
+  diffotator hook --uninstall        Remove it again
 
 Options:
   -C, --cwd <dir>     Repository to review (default: cwd)
@@ -18,6 +24,11 @@ Options:
       --no-open       Do not launch a browser
       --title <s>     Header title for the session
   -h, --help
+
+Stop hook:
+  Reviews fire automatically when a turn leaves changes worth looking at.
+  DIFFOTATOR_HOOK=off            Disable without uninstalling
+  DIFFOTATOR_HOOK_MIN_FILES=3    Fewest changed files that will open a review
 
 Output (stdout, for agent consumption):
   annotations markdown  — the user left comments
@@ -49,8 +60,76 @@ function openBrowser(url) {
   execFile(cmd, [url], () => {});
 }
 
+/**
+ * Run one review session to completion.
+ * @returns {Promise<{decision: string, output: string}>}
+ */
+function serveReview(root, { open = true, port = 0, title } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (output, decision) => {
+      if (done) return;
+      done = true;
+      server.close(() => resolve({ decision, output }));
+      setTimeout(() => resolve({ decision, output }), 300).unref();
+    };
+    const server = createServer({ root, finish, title });
+    server.listen(port, "127.0.0.1", () => {
+      const url = `http://localhost:${server.address().port}`;
+      process.stderr.write(`\n  diffotator  ${path.basename(root)}\n  ${url}\n\n`);
+      if (open) openBrowser(url);
+    });
+    const bail = () => finish("Review session closed without feedback.", "dismissed");
+    process.on("SIGINT", bail);
+    process.on("SIGTERM", bail);
+  });
+}
+
+const SETTINGS = path.join(os.homedir(), ".claude", "settings.json");
+// Claude Code defaults hooks to 600s. A review is human-paced, so give it a day.
+const HOOK_TIMEOUT = 86400;
+
+function hookEntry() {
+  return { hooks: [{ type: "command", command: "diffotator hook", timeout: HOOK_TIMEOUT }] };
+}
+
+function installHook(remove) {
+  let cfg = {};
+  try {
+    cfg = JSON.parse(fs.readFileSync(SETTINGS, "utf8"));
+  } catch {}
+  cfg.hooks = cfg.hooks || {};
+  const list = (cfg.hooks.Stop || []).filter(
+    (e) => !(e.hooks || []).some((h) => String(h.command || "").startsWith("diffotator hook"))
+  );
+  if (!remove) list.push(hookEntry());
+  if (list.length) cfg.hooks.Stop = list;
+  else delete cfg.hooks.Stop;
+  if (!Object.keys(cfg.hooks).length) delete cfg.hooks;
+
+  fs.mkdirSync(path.dirname(SETTINGS), { recursive: true });
+  if (fs.existsSync(SETTINGS)) fs.copyFileSync(SETTINGS, SETTINGS + ".diffotator-backup");
+  fs.writeFileSync(SETTINGS, JSON.stringify(cfg, null, 2) + "\n");
+  process.stderr.write(
+    `${remove ? "Removed" : "Installed"} the diffotator Stop hook in ${SETTINGS}\n` +
+      (remove ? "" : `Reviews open when a turn leaves ${hook.config().minFiles}+ changed files.\n`)
+  );
+}
+
 async function main() {
-  const opts = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  if (argv[0] === "hook") {
+    if (argv.includes("--install")) return installHook(false);
+    if (argv.includes("--uninstall")) return installHook(true);
+    // Hook mode: stdout carries JSON for the harness and nothing else.
+    const result = await hook.run({
+      openReview: (root) => serveReview(root, { open: true }),
+    });
+    process.stdout.write(JSON.stringify(result));
+    return;
+  }
+
+  const opts = parseArgs(argv);
   if (opts.help) {
     process.stdout.write(HELP);
     return;
@@ -64,26 +143,13 @@ async function main() {
     process.exit(1);
   }
 
-  let done = false;
-  const finish = (out, decision) => {
-    if (done) return;
-    done = true;
-    if (out) process.stdout.write(out.endsWith("\n") ? out : out + "\n");
-    server.close(() => process.exit(0));
-    // Sockets from the browser can keep the server alive; do not wait forever.
-    setTimeout(() => process.exit(0), 300).unref();
-  };
-
-  const server = createServer({ root, finish, title: opts.title });
-  server.listen(opts.port || 0, "127.0.0.1", () => {
-    const url = `http://localhost:${server.address().port}`;
-    process.stderr.write(`\n  diffotator  ${path.basename(root)}\n  ${url}\n\n`);
-    if (opts.open) openBrowser(url);
+  const { output } = await serveReview(root, {
+    open: opts.open,
+    port: opts.port || 0,
+    title: opts.title,
   });
-
-  const bail = () => finish("Review session closed without feedback.", "dismissed");
-  process.on("SIGINT", bail);
-  process.on("SIGTERM", bail);
+  if (output) process.stdout.write(output.endsWith("\n") ? output : output + "\n");
+  process.exit(0);
 }
 
 main().catch((e) => {

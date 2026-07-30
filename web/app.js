@@ -1267,21 +1267,25 @@ $("#chkFull").onchange = (e) => {
 // ---------------------------------------------------------------------------
 // annotations
 // ---------------------------------------------------------------------------
-const DRAFT_KEY = () => "diffotator:" + (S.ov ? S.ov.root : "");
+/* Drafts live on the server, not in localStorage: localStorage is keyed to the
+   origin including the port, and every run binds a new random port, so drafts
+   written by one session were invisible to the next. */
+let draftTimer = null;
 function saveDraft() {
-  try {
-    localStorage.setItem(DRAFT_KEY(), JSON.stringify({ ann: S.ann, viewed: [...S.viewed] }));
-  } catch {}
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => {
+    fetch("/api/draft", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ann: S.ann, viewed: [...S.viewed] }),
+    }).catch(() => {});
+  }, 250);
 }
 function loadDraft() {
-  try {
-    const raw = localStorage.getItem(DRAFT_KEY());
-    if (!raw) return;
-    const d = JSON.parse(raw);
-    // v0 stored a bare array of annotations
-    S.ann = (Array.isArray(d) ? d : d.ann) || [];
-    S.viewed = new Set((Array.isArray(d) ? [] : d.viewed) || []);
-  } catch {}
+  const d = S.ov && S.ov.draft;
+  if (!d) return;
+  S.ann = d.ann || [];
+  S.viewed = new Set(d.viewed || []);
 }
 
 function lineText(file, side, line) {
@@ -1488,9 +1492,6 @@ async function submit(decision) {
       scope: S.scope,
     }),
   });
-  try {
-    localStorage.removeItem(DRAFT_KEY());
-  } catch {}
   $("#doneIcon").textContent = decision === "approved" ? "✓" : decision === "dismissed" ? "✕" : "→";
   $("#doneTitle").textContent =
     decision === "approved" ? "Changes approved" : decision === "dismissed" ? "Session closed" : "Feedback sent";

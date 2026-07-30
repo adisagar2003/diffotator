@@ -106,6 +106,7 @@ fs.writeFileSync(path.join(dir, "new.txt"), "hello\n");
 
   fs.rmSync(dir, { recursive: true, force: true });
   await awkwardShapes();
+  await draftsAndHook();
   console.log("ok — all checks passed");
 })().catch((e) => {
   console.error(e);
@@ -187,3 +188,77 @@ async function awkwardShapes() {
 
 
 
+
+/* The Stop hook's whole risk is firing when it shouldn't, so the gate is the
+   part that needs pinning down — not the browser it eventually opens. */
+async function draftsAndHook() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-data-"));
+  process.env.DIFFOTATOR_DATA_DIR = home;
+  delete require.cache[require.resolve("./src/drafts")];
+  delete require.cache[require.resolve("./src/hook")];
+  const D = require("./src/drafts");
+  const H = require("./src/hook");
+
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-hook-"));
+  const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "pipe" }).toString();
+  const put = (p, s) => fs.writeFileSync(path.join(d, p), s);
+  g("init", "-q", "-b", "main");
+  g("config", "user.email", "t@t.t");
+  g("config", "user.name", "T");
+  put("a.ts", "const a = 1;\n");
+  g("add", "-A");
+  g("commit", "-qm", "init");
+  const root = await G.repoRoot(d);
+
+  // --- drafts survive a process boundary, which localStorage did not --------
+  assert.strictEqual(D.loadDraft(root), null, "no draft to begin with");
+  D.saveDraft(root, { ann: [{ id: "a1", file: "a.ts", line: 1, body: "hm" }], viewed: ["worktree|a.ts"] });
+  const back = D.loadDraft(root);
+  assert.strictEqual(back.ann.length, 1, "annotations round-trip through disk");
+  assert.deepStrictEqual(back.viewed, ["worktree|a.ts"], "viewed state round-trips");
+  D.clearDraft(root);
+  assert.strictEqual(D.loadDraft(root), null, "submitting clears the draft");
+
+  // --- the gate ------------------------------------------------------------
+  const at = (input, opts) => H.decide({ cwd: d, ...input }, opts);
+
+  assert.strictEqual((await at({})).verdict, "allow", "clean tree never interrupts");
+  assert.strictEqual((await at({})).why, "clean-tree");
+
+  put("a.ts", "const a = 2;\n");
+  assert.strictEqual((await at({}, { minFiles: 3 })).verdict, "allow", "a one-file turn is below threshold");
+  assert.match((await at({}, { minFiles: 3 })).why, /below-threshold/);
+
+  put("b.ts", "const b = 1;\n");
+  put("c.ts", "const c = 1;\n");
+  const hit = await at({}, { minFiles: 3 });
+  assert.strictEqual(hit.verdict, "review", "three changed files opens a review");
+  assert.strictEqual(hit.files, 3);
+
+  // Approving must not re-open on the very next Stop.
+  D.saveHookState(root, { reviewed: hit.fingerprint, decision: "approved" });
+  const again = await at({}, { minFiles: 3 });
+  assert.strictEqual(again.verdict, "allow", "an unchanged tree stays quiet after review");
+  assert.strictEqual(again.why, "unchanged-since-review");
+
+  // ...but editing the same file in place must count as new work. A file-list
+  // fingerprint would wrongly call this "already reviewed".
+  put("a.ts", "const a = 3;\n");
+  assert.strictEqual((await at({}, { minFiles: 3 })).verdict, "review", "in-place edits re-open");
+
+  assert.strictEqual((await at({ stop_hook_active: true }, { minFiles: 3 })).verdict, "allow", "cannot loop");
+  assert.strictEqual((await at({}, { minFiles: 3, enabled: false })).verdict, "allow", "kill switch");
+  assert.strictEqual((await H.decide({ cwd: os.tmpdir() }, { minFiles: 1 })).why, "not-a-repo");
+
+  // --- harness contract ----------------------------------------------------
+  assert.deepStrictEqual(H.stopOutput(null), {}, "allowing a stop emits no decision");
+  assert.deepStrictEqual(
+    H.stopOutput("fix this"),
+    { decision: "block", reason: "fix this" },
+    "feedback blocks the stop and carries the reason"
+  );
+
+  fs.rmSync(d, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+  delete process.env.DIFFOTATOR_DATA_DIR;
+}
