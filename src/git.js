@@ -10,6 +10,8 @@ const RS = "\x1e"; // record separator
 // rejected earlier by MAX_BLOB.
 const MAX_BUFFER = 32 * 1024 * 1024;
 const MAX_BLOB = 4 * 1024 * 1024;
+// A diff past this is not review material; rendering it just costs a stall.
+const MAX_DIFF_LINES = 200000;
 
 function git(cwd, args, opts = {}) {
   return new Promise((resolve, reject) => {
@@ -191,12 +193,25 @@ async function commitMeta(root, sha) {
 
 const STATUS_LABEL = { A: "added", M: "modified", D: "deleted", R: "renamed", C: "copied", T: "typechange" };
 
+/**
+ * numstat writes a rename as one compressed path — `src/{old.ts => new.ts}` or
+ * bare `old.ts => new.ts` — while name-status writes the two paths in separate
+ * columns. Expand to the destination so the two lists key against each other,
+ * otherwise every renamed file reports +0/-0.
+ */
+function numstatPath(p) {
+  const braced = /^(.*)\{(.*) => (.*)\}(.*)$/.exec(p);
+  if (braced) return (braced[1] + braced[3] + braced[4]).replace(/\/{2,}/g, "/");
+  const bare = / => /.exec(p) ? p.split(" => ")[1] : null;
+  return bare || p;
+}
+
 /** Merge `--name-status` and `--numstat` into one file list. */
 function mergeFileLists(nameStatus, numstat) {
   const stats = new Map();
   for (const line of numstat.split("\n").filter(Boolean)) {
     const [add, del, ...rest] = line.split("\t");
-    const p = rest.length > 1 ? rest[rest.length - 1] : rest[0];
+    const p = numstatPath(rest.length > 1 ? rest[rest.length - 1] : rest[0]);
     if (!p) continue;
     stats.set(p, {
       additions: add === "-" ? null : +add,
@@ -230,16 +245,37 @@ function mergeFileLists(nameStatus, numstat) {
  * file content) is expressed in terms of one:
  *   {type:'worktree'}                — working tree + index vs HEAD (+ untracked)
  *   {type:'commit', sha}             — a single commit vs its first parent
- *   {type:'range', base, head}       — base..head, e.g. branch vs origin/main
+ *   {type:'range', base, head}       — base...head, e.g. branch vs origin/main
+ *
+ * Commits resolve to an explicit two-dot pair rather than the tempting `sha^!`.
+ * `sha^!` excludes *every* parent, so a merge commit diffs to nothing at all,
+ * and a root commit has no `^` to exclude and silently diffs the wrong way
+ * round. Naming both endpoints avoids both traps.
  */
-function scopeArgs(scope) {
-  if (scope.type === "commit") return [`${scope.sha}^!`];
+let emptyTreeCache = null;
+async function emptyTree(root) {
+  // Hardcoding 4b825dc… only works for sha1 repos; ask git instead.
+  if (!emptyTreeCache) emptyTreeCache = (await git(root, ["hash-object", "-t", "tree", "/dev/null"])).trim();
+  return emptyTreeCache;
+}
+
+async function scopeArgs(root, scope) {
+  if (scope.type === "commit") {
+    const parents = (await tryGit(root, ["rev-list", "--parents", "-n", "1", scope.sha]))
+      .trim()
+      .split(" ")
+      .slice(1);
+    // First parent only: for a merge that means "what this merge brought in",
+    // which is what a reviewer is looking at.
+    const from = parents[0] || (await emptyTree(root));
+    return [from, scope.sha];
+  }
   if (scope.type === "range") return [`${scope.base}...${scope.head}`];
   return ["HEAD"]; // worktree
 }
 
 async function changedFiles(root, scope) {
-  const args = scopeArgs(scope);
+  const args = await scopeArgs(root, scope);
   const [ns, num] = await Promise.all([
     tryGit(root, ["diff", "--no-color", "--name-status", "-M", ...args]),
     tryGit(root, ["diff", "--no-color", "--numstat", "-M", ...args]),
@@ -261,7 +297,7 @@ async function changedFiles(root, scope) {
         const st = fs.statSync(path.join(root, p));
         // git lists symlinked/ignored dirs as single entries; they are not reviewable files
         if (st.isDirectory()) continue;
-        if (st.size < MAX_BLOB) additions = fs.readFileSync(path.join(root, p), "utf8").split("\n").length;
+        if (st.size < MAX_BLOB) additions = splitLines(fs.readFileSync(path.join(root, p), "utf8")).length;
       } catch {
         continue;
       }
@@ -281,6 +317,18 @@ async function changedFiles(root, scope) {
  * (-U<huge>) so the client holds the whole file and can expand collapsed
  * regions with zero extra round-trips — that is what keeps scrolling snappy.
  */
+/**
+ * Split file text into display lines. Two traps: a file ending in a newline
+ * yields a phantom empty last line, and a CRLF file leaves a stray `\r` at the
+ * end of every line that renders as a glyph in the diff.
+ */
+function splitLines(text) {
+  const out = text.split("\n");
+  if (out.length > 1 && out[out.length - 1] === "") out.pop();
+  for (let i = 0; i < out.length; i++) if (out[i].endsWith("\r")) out[i] = out[i].slice(0, -1);
+  return out;
+}
+
 function parseUnifiedDiff(text) {
   const rows = [];
   let oldNo = 0;
@@ -306,7 +354,7 @@ function parseUnifiedDiff(text) {
       continue;
     }
     const c = raw[0];
-    const body = raw.slice(1);
+    const body = raw.slice(1).replace(/\r$/, "");
     if (c === "+") rows.push({ t: "add", n: newNo++, s: body });
     else if (c === "-") rows.push({ t: "del", o: oldNo++, s: body });
     else if (c === " ") rows.push({ t: "ctx", o: oldNo++, n: newNo++, s: body });
@@ -317,7 +365,16 @@ function parseUnifiedDiff(text) {
 }
 
 async function fileDiff(root, scope, file, context = 1000000) {
-  const args = ["diff", "--no-color", "--no-ext-diff", `-U${context}`, "-M", ...scopeArgs(scope), "--", file];
+  const sargs = await scopeArgs(root, scope);
+  // `--numstat` reports binaries as `-  -` and costs one cheap call, which is
+  // far better than streaming a megabyte of unified diff to discover the same.
+  const stat = (await tryGit(root, ["diff", "--no-color", "--numstat", "-M", ...sargs, "--", file]))
+    .split("\t");
+  if (stat[0] === "-" && stat[1] === "-") return { rows: [], binary: true };
+  const changed = (+stat[0] || 0) + (+stat[1] || 0);
+  if (changed > MAX_DIFF_LINES) return { rows: [], tooBig: true, changed };
+
+  const args = ["diff", "--no-color", "--no-ext-diff", `-U${context}`, "-M", ...sargs, "--", file];
   let text = "";
   try {
     text = await git(root, args);
@@ -330,15 +387,16 @@ async function fileDiff(root, scope, file, context = 1000000) {
     if (fs.existsSync(abs)) {
       const st = fs.statSync(abs);
       if (st.size > MAX_BLOB) return { rows: [], tooBig: true };
-      const content = fs.readFileSync(abs, "utf8");
-      if (content.includes("\0")) return { rows: [], binary: true };
-      return {
-        rows: content.split("\n").map((s, i) => ({ t: "add", n: i + 1, s })),
-        binary: false,
-      };
+      const buf = fs.readFileSync(abs);
+      if (buf.includes(0)) return { rows: [], binary: true };
+      const content = buf.toString("utf8");
+      if (!content.length) return { rows: [], empty: true };
+      return { rows: splitLines(content).map((s, i) => ({ t: "add", n: i + 1, s })), binary: false };
     }
   }
-  return parseUnifiedDiff(text);
+  const parsed = parseUnifiedDiff(text);
+  if (!parsed.rows.length && !parsed.binary) parsed.empty = true;
+  return parsed;
 }
 
 /** Whole-file content at a scope's "after" side — for reviewing untouched files. */
@@ -362,14 +420,32 @@ async function fileContent(root, scope, file) {
       return { error: e.message };
     }
   }
-  return { rows: text.split("\n").map((s, i) => ({ t: "ctx", o: i + 1, n: i + 1, s })) };
+  if (!text.length) return { rows: [], empty: true };
+  return { rows: splitLines(text).map((s, i) => ({ t: "ctx", o: i + 1, n: i + 1, s })) };
 }
 
 /** Full repository file tree at a revision (Fork's "File Tree" tab). */
 async function tree(root, scope) {
   const rev = scope.type === "commit" ? scope.sha : scope.type === "range" ? scope.head : "HEAD";
   const out = await tryGit(root, ["ls-tree", "-r", "--name-only", rev]);
-  return out.split("\n").filter(Boolean);
+  const paths = out.split("\n").filter(Boolean);
+  if (scope.type === "worktree") {
+    // Brand-new files are not in any tree yet, but they are the ones most
+    // worth browsing right after an agent run.
+    const extra = (await tryGit(root, ["ls-files", "--others", "--exclude-standard"]))
+      .split("\n")
+      .filter(Boolean)
+      .filter((p) => {
+        try {
+          return !fs.statSync(path.join(root, p)).isDirectory();
+        } catch {
+          return false;
+        }
+      });
+    paths.push(...extra);
+    paths.sort();
+  }
+  return paths;
 }
 
 module.exports = {

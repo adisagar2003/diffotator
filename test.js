@@ -86,7 +86,8 @@ fs.writeFileSync(path.join(dir, "new.txt"), "hello\n");
   assert.strictEqual(untracked.rows[0].t, "add", "untracked file renders as all-add");
 
   const full = await G.fileContent(root, { type: "worktree" }, "a.js");
-  assert.strictEqual(full.rows.length, 7, "whole file readable for out-of-diff review");
+  assert.strictEqual(full.rows.length, 6, "whole file readable, no phantom trailing line");
+  assert.strictEqual(full.rows[5].s, "six");
 
   const log = await G.log(root, { limit: 5 });
   assert.strictEqual(log.length, 1);
@@ -94,7 +95,7 @@ fs.writeFileSync(path.join(dir, "new.txt"), "hello\n");
   assert.deepStrictEqual(log[0].parents, []);
 
   const tree = await G.tree(root, { type: "worktree" });
-  assert.deepStrictEqual(tree, ["a.js"]);
+  assert.deepStrictEqual(tree, ["a.js", "new.txt"], "tree includes the untracked file");
 
   // commit scope
   sh("add", "-A");
@@ -104,8 +105,85 @@ fs.writeFileSync(path.join(dir, "new.txt"), "hello\n");
   assert.deepStrictEqual(cf.map((f) => f.path).sort(), ["a.js", "new.txt"]);
 
   fs.rmSync(dir, { recursive: true, force: true });
+  await awkwardShapes();
   console.log("ok — all checks passed");
 })().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
+/* Every one of these was a real bug found by pointing the git layer at a repo
+   that is not a straight line of ordinary commits. */
+async function awkwardShapes() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-shapes-"));
+  const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "pipe" }).toString();
+  const put = (p, s) => {
+    fs.mkdirSync(path.dirname(path.join(d, p)), { recursive: true });
+    fs.writeFileSync(path.join(d, p), s);
+  };
+  g("init", "-q", "-b", "main");
+  g("config", "user.email", "t@t.t");
+  g("config", "user.name", "T");
+
+  put("old-name.ts", "const a = 1;\nconst b = 2;\nconst c = 3;\n");
+  put("crlf.txt", "one\r\ntwo\r\n");
+  fs.writeFileSync(path.join(d, "logo.bin"), Buffer.from([0, 1, 2, 255, 0]));
+  g("add", "-A");
+  g("commit", "-qm", "root");
+  const ROOT = g("rev-parse", "HEAD").trim();
+
+  g("checkout", "-qb", "feature");
+  fs.mkdirSync(path.join(d, "sub"), { recursive: true });
+  g("mv", "old-name.ts", "sub/new-name.ts");
+  put("sub/new-name.ts", "const a = 1;\nconst b = 22;\nconst c = 3;\n");
+  g("add", "-A");
+  g("commit", "-qm", "rename+edit");
+
+  g("checkout", "-q", "main");
+  put("main-only.ts", "const m = 1;\n");
+  g("add", "-A");
+  g("commit", "-qm", "main side");
+  g("merge", "-q", "--no-ff", "feature", "-m", "merge feature");
+  const MERGE = g("rev-parse", "HEAD").trim();
+
+  const root = await G.repoRoot(d);
+
+  // A root commit has no parent to exclude, so `sha^!` diffs it the wrong way.
+  const rootFiles = await G.changedFiles(root, { type: "commit", sha: ROOT });
+  assert.deepStrictEqual(
+    rootFiles.map((f) => f.status).sort(),
+    ["added", "added", "added"],
+    "root commit is all additions"
+  );
+  const rootDiff = await G.fileDiff(root, { type: "commit", sha: ROOT }, "old-name.ts");
+  assert.ok(rootDiff.rows.every((r) => r.t === "add"), "root commit diff is not reversed");
+
+  // `sha^!` excludes every parent, so a merge diffs to nothing at all.
+  const mergeFiles = await G.changedFiles(root, { type: "commit", sha: MERGE });
+  assert.ok(mergeFiles.length > 0, "merge commit shows what it merged in");
+  const renamed = mergeFiles.find((f) => f.status === "renamed");
+  assert.ok(renamed, "rename is detected across the merge");
+  assert.strictEqual(renamed.path, "sub/new-name.ts");
+  assert.strictEqual(renamed.oldPath, "old-name.ts");
+  // numstat compresses renames to `{old => new}`; unexpanded it reports +0/-0.
+  assert.strictEqual(renamed.additions, 1, "renamed file keeps its line stats");
+  assert.strictEqual(renamed.deletions, 1);
+
+  const crlf = await G.fileContent(root, { type: "commit", sha: ROOT }, "crlf.txt");
+  assert.deepStrictEqual(crlf.rows.map((r) => r.s), ["one", "two"], "CRLF and phantom line stripped");
+
+  const bin = await G.fileDiff(root, { type: "commit", sha: ROOT }, "logo.bin");
+  assert.strictEqual(bin.binary, true, "binary reported, not rendered blank");
+
+  // Files git does not track yet are exactly what an agent just wrote.
+  put("brand/new/deep.ts", "const deep = 1;\n");
+  const tree = await G.tree(root, { type: "worktree" });
+  assert.ok(tree.includes("brand/new/deep.ts"), "untracked files are browsable in the tree");
+  const wt = await G.changedFiles(root, { type: "worktree" });
+  assert.strictEqual(wt.find((f) => f.path === "brand/new/deep.ts").additions, 1, "no phantom line in count");
+
+  fs.rmSync(d, { recursive: true, force: true });
+}
+
+
+

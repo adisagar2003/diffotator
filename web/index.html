@@ -13,6 +13,7 @@
     <span id="repoName" class="repo"></span>
     <span id="branchChip" class="chip branch"></span>
     <span id="scopeChip" class="chip scope"></span>
+    <div id="progress" class="progress"></div>
   </div>
   <div class="tb-right">
     <button id="btnComments" class="btn ghost" title="Toggle comments panel (t)">
@@ -44,6 +45,9 @@
         <button class="tab" data-tab="tree">File Tree</button>
         <div class="tabbar-spacer"></div>
         <div id="diffTools" class="diff-tools">
+          <label class="tgl viewed" title="Mark reviewed and jump to the next unviewed file (v)">
+            <input type="checkbox" id="chkViewed"> Viewed
+          </label>
           <label class="tgl" title="Show whole file, not just the diff (f)">
             <input type="checkbox" id="chkFull"> Full file
           </label>
@@ -58,12 +62,23 @@
         <div id="leftPane">
           <div class="filter-row">
             <input id="fileFilter" class="filter" placeholder="Filter files…" spellcheck="false">
+            <div class="seg tiny">
+              <button id="segList" class="seg-btn active" title="Flat list of files">List</button>
+              <button id="segTree" class="seg-btn" title="Directory tree">Tree</button>
+            </div>
           </div>
           <div id="fileTree" class="tree"></div>
         </div>
         <div class="vsplit" data-target="leftPane"></div>
         <div id="rightPane">
           <div id="diffHeader" class="diff-header"></div>
+          <div id="searchBar" class="searchbar" hidden>
+            <input id="searchInput" placeholder="Find in file…" spellcheck="false">
+            <span id="searchCount" class="scount"></span>
+            <button id="searchPrev" title="Previous (⇧⏎)">▲</button>
+            <button id="searchNext" title="Next (⏎)">▼</button>
+            <button id="searchClose" title="Close (Esc)">✕</button>
+          </div>
           <div id="diffBody" class="vlist code"><div class="vspacer"></div><div class="vrows"></div></div>
           <div id="hscroll" class="off"><div id="hscrollInner"></div></div>
           <div id="commitDetail" class="detail" hidden></div>
@@ -125,9 +140,12 @@
     <table class="keys">
       <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous file</td></tr>
       <tr><td><kbd>n</kbd> / <kbd>p</kbd></td><td>next / previous change</td></tr>
+      <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>move the line cursor</td></tr>
       <tr><td><kbd>c</kbd></td><td>comment on focused line</td></tr>
+      <tr><td><kbd>⌘F</kbd></td><td>find in file</td></tr>
       <tr><td><kbd>s</kbd></td><td>split / unified</td></tr>
       <tr><td><kbd>f</kbd></td><td>full file / diff only</td></tr>
+      <tr><td><kbd>v</kbd></td><td>mark viewed &amp; go to next unviewed</td></tr>
       <tr><td><kbd>t</kbd></td><td>toggle comments panel</td></tr>
       <tr><td><kbd>/</kbd></td><td>filter files</td></tr>
       <tr><td><kbd>⌘⏎</kbd></td><td>save comment / send feedback</td></tr>

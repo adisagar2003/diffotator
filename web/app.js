@@ -35,14 +35,20 @@ const S = {
   items: [],
   expanded: new Set(),
   ann: [],
+  viewed: new Set(),
   focus: null,
   treePaths: null,
   treeOpen: new Set(),
   fileOpen: new Set(),
   filter: "",
+  listMode: true, // reviewing is "work the list of files"; browsing is a tree
   charW: 7.5,
+  uiCharW: 6.2,
   popFor: null,
   popLabel: "suggestion",
+  search: { q: "", hits: [], idx: 0 },
+  loadingMore: false,
+  commitsDone: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -57,6 +63,10 @@ async function api(path, params = {}, { cached = false } = {}) {
   if (cached) cache.set(url, p);
   return p;
 }
+function scopeId() {
+  const x = S.scope;
+  return x.type === "commit" ? "commit:" + x.sha : x.type === "range" ? "range:" + x.base : "worktree";
+}
 function scopeParams() {
   const s = S.scope;
   if (s.type === "commit") return { scope: "commit", sha: s.sha };
@@ -67,22 +77,61 @@ function scopeParams() {
 // ---------------------------------------------------------------------------
 // virtual list
 // ---------------------------------------------------------------------------
-function vlist(container, rowH, count, renderRow) {
+/**
+ * Windowed list. Rows are uniform by default; pass `heightOf` when they are
+ * not (the diff mixes 20px code lines with taller inline comment cards) and a
+ * prefix-sum index keeps lookup O(log n) with no measurement pass.
+ */
+function vlist(container, rowH, count, renderRow, heightOf) {
   const spacer = container.querySelector(".vspacer");
   const rows = container.querySelector(".vrows");
   let win = [-1, -1];
+  let offsets = null;
+  let emptyHtml = null;
   const state = { count, rowH };
+
+  function reindex() {
+    if (!heightOf) return;
+    const n = state.count();
+    offsets = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) offsets[i + 1] = offsets[i] + heightOf(i);
+  }
+  const total = () => (heightOf ? (offsets ? offsets[offsets.length - 1] : 0) : state.count() * state.rowH);
+  const topOf = (i) => (heightOf ? offsets[Math.min(i, offsets.length - 1)] : i * state.rowH);
+  function indexAt(y) {
+    if (!heightOf) return Math.floor(y / state.rowH);
+    let lo = 0;
+    let hi = offsets.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (offsets[mid] <= y) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  }
+
   function paint(force) {
     const n = state.count();
-    spacer.style.height = n * state.rowH + "px";
+    // An empty state has to survive repaints — the ResizeObserver fires right
+    // after layout and would otherwise blank it out.
+    if (!n && emptyHtml != null) {
+      spacer.style.height = "0px";
+      rows.innerHTML = emptyHtml;
+      win = [-1, -1];
+      return;
+    }
+    if (heightOf && (!offsets || offsets.length !== n + 1)) reindex();
+    spacer.style.height = total() + "px";
     const st = container.scrollTop;
     const h = container.clientHeight || 400;
-    const from = Math.max(0, Math.floor(st / state.rowH) - 10);
-    const to = Math.min(n, Math.ceil((st + h) / state.rowH) + 10);
+    const from = Math.max(0, indexAt(st) - 10);
+    let to = from;
+    while (to < n && topOf(to) < st + h) to++;
+    to = Math.min(n, to + 10);
     if (!force && from === win[0] && to === win[1]) return;
     win = [from, to];
     let html = "";
-    for (let i = from; i < to; i++) html += renderRow(i, i * state.rowH);
+    for (let i = from; i < to; i++) html += renderRow(i, topOf(i));
     rows.innerHTML = html;
   }
   container.addEventListener("scroll", () => paint(false), { passive: true });
@@ -90,6 +139,8 @@ function vlist(container, rowH, count, renderRow) {
   return {
     refresh: () => {
       win = [-1, -1];
+      offsets = null;
+      emptyHtml = null;
       paint(true);
     },
     paint,
@@ -98,14 +149,14 @@ function vlist(container, rowH, count, renderRow) {
        orphan the spacer/rows nodes this closure holds. */
     setEmpty(html) {
       win = [-1, -1];
-      spacer.style.height = "0px";
-      rows.innerHTML = `<div class="empty-state">${html}</div>`;
+      offsets = null;
+      emptyHtml = `<div class="empty-state">${html}</div>`;
+      paint(true);
     },
     scrollToIndex(i, center) {
-      const target = center
-        ? i * state.rowH - container.clientHeight / 2
-        : i * state.rowH - 60;
-      container.scrollTop = Math.max(0, target);
+      if (heightOf && (!offsets || offsets.length !== state.count() + 1)) reindex();
+      const y = topOf(i);
+      container.scrollTop = Math.max(0, center ? y - container.clientHeight / 2 : y - 60);
       paint(true);
     },
   };
@@ -126,12 +177,18 @@ function relTime(ms) {
   return d.toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 function measureChar() {
-  const s = document.createElement("span");
-  s.style.cssText = "position:absolute;visibility:hidden;font:12.5px/20px var(--mono);white-space:pre";
-  s.textContent = "0".repeat(100);
-  document.body.appendChild(s);
-  S.charW = s.getBoundingClientRect().width / 100 || 7.5;
-  s.remove();
+  const probe = (font, sample) => {
+    const el = document.createElement("span");
+    el.style.cssText = `position:absolute;visibility:hidden;white-space:pre;font:${font}`;
+    el.textContent = sample;
+    document.body.appendChild(el);
+    const w = el.getBoundingClientRect().width / sample.length;
+    el.remove();
+    return w;
+  };
+  S.charW = probe("12.5px/20px var(--mono)", "0".repeat(100)) || 7.5;
+  // Proportional average, used to predict how many lines a comment will wrap to.
+  S.uiCharW = probe("12.5px/17px var(--ui)", "The quick brown fox jumps over the lazy dog, again and again.") || 6.2;
 }
 
 // ---------------------------------------------------------------------------
@@ -358,11 +415,39 @@ $("#commitList").addEventListener("click", (e) => {
   if (r) selectCommit(r.dataset.sha);
 });
 
-async function loadCommits(select = true) {
+const COMMIT_PAGE = 300;
+async function loadMoreCommits() {
+  if (S.loadingMore || S.commitsDone) return;
+  S.loadingMore = true;
   const { commits } = await api("commits", {
-    limit: 400,
+    limit: COMMIT_PAGE,
+    skip: S.commits.length,
     ...(S.commitRev ? { rev: S.commitRev } : {}),
   });
+  if (commits.length < COMMIT_PAGE) S.commitsDone = true;
+  if (commits.length) {
+    S.commits = S.commits.concat(commits);
+    S.graph = computeGraph(S.commits);
+    commitVL.refresh();
+  }
+  S.loadingMore = false;
+}
+$("#commitList").addEventListener(
+  "scroll",
+  () => {
+    const el = $("#commitList");
+    if (el.scrollTop + el.clientHeight > el.scrollHeight - 400) loadMoreCommits();
+  },
+  { passive: true }
+);
+
+async function loadCommits(select = true) {
+  S.commitsDone = false;
+  const { commits } = await api("commits", {
+    limit: COMMIT_PAGE,
+    ...(S.commitRev ? { rev: S.commitRev } : {}),
+  });
+  if (commits.length < COMMIT_PAGE) S.commitsDone = true;
   S.commits = commits;
   S.graph = computeGraph(commits);
   commitVL.refresh();
@@ -420,6 +505,7 @@ async function setScope(scope, name, keepCommits) {
   if (seq !== scopeSeq) return;
   S.files = files;
   renderFileTree();
+  renderProgress();
   sidebar();
   const first = files[0];
   if (first) selectFile(first.path);
@@ -451,9 +537,24 @@ function buildTree(paths, meta) {
       if (isFile && meta) node.meta = meta.get(p);
     });
   }
-  // collapse single-child directory chains the way Fork does not — keep full
-  // nesting so paths stay recognisable.
   return root;
+}
+
+/**
+ * `apps/backend/src/services/core/routes/products.ts` costs six rows of tree to
+ * show one file. Fold runs of single-child directories into one row so the pane
+ * shows files instead of scaffolding.
+ */
+function compactDir(node) {
+  let name = node.name;
+  let cur = node;
+  while (cur.children.size === 1) {
+    const only = [...cur.children.values()][0];
+    if (!only.dir) break;
+    name += "/" + only.name;
+    cur = only;
+  }
+  return { label: name, node: cur };
 }
 
 const STATUS_CODE = { modified: "M", added: "A", deleted: "D", renamed: "R", copied: "C", typechange: "T", untracked: "q" };
@@ -465,12 +566,12 @@ function renderFileTree() {
   const filter = S.filter.toLowerCase();
   const box = $("#fileTree");
 
-  if (filter) {
-    const hits = paths.filter((p) => p.toLowerCase().includes(filter)).slice(0, 500);
+  const flat = filter || (S.listMode && !isTreeTab);
+  if (flat) {
+    const hits = (filter ? paths.filter((p) => p.toLowerCase().includes(filter)) : paths).slice(0, 800);
     box.innerHTML =
-      hits
-        .map((p) => fileRow(p, meta.get(p), 0, p))
-        .join("") || `<div class="empty-state">No match</div>`;
+      hits.map((p) => fileRow(p, meta.get(p), 0, null)).join("") ||
+      `<div class="empty-state">${filter ? "No match" : "No changes"}</div>`;
     return;
   }
 
@@ -482,12 +583,13 @@ function renderFileTree() {
     );
     for (const k of kids) {
       if (k.dir) {
-        const open = isTreeTab ? S.treeOpen.has(k.path) : !S.treeOpen.has("!" + k.path);
+        const { label, node: target } = compactDir(k);
+        const open = isTreeTab ? S.treeOpen.has(target.path) : !S.treeOpen.has("!" + target.path);
         out.push(
-          `<div class="tnode tdir" data-dir="${esc(k.path)}" style="padding-left:${6 + depth * 12}px">
-            <span class="caret">${open ? "▾" : "▸"}</span>📁<span class="nm">${esc(k.name)}</span></div>`
+          `<div class="tnode tdir" data-dir="${esc(target.path)}" style="padding-left:${6 + depth * 12}px" title="${esc(target.path)}">
+            <span class="caret">${open ? "▾" : "▸"}</span>📁<span class="nm">${esc(label)}</span></div>`
         );
-        if (open) walk(k, depth + 1);
+        if (open) walk(target, depth + 1);
       } else {
         out.push(fileRow(k.path, k.meta, depth, k.name));
       }
@@ -497,17 +599,79 @@ function renderFileTree() {
   box.innerHTML = out.join("") || `<div class="empty-state">No changes</div>`;
 }
 
+// Viewed state is per scope: the same path in the worktree and in a commit are
+// different things to have read.
+const viewKey = (path) => scopeId() + "|" + path;
+const isViewed = (path) => S.viewed.has(viewKey(path));
+
+function setViewed(path, on) {
+  const k = viewKey(path);
+  on ? S.viewed.add(k) : S.viewed.delete(k);
+  saveDraft();
+  renderProgress();
+  renderFileTree();
+  syncViewedToggle();
+}
+
+function renderProgress() {
+  const total = S.files.length;
+  const seen = S.files.filter((f) => isViewed(f.path)).length;
+  const add = S.files.reduce((a, f) => a + (f.additions || 0), 0);
+  const del = S.files.reduce((a, f) => a + (f.deletions || 0), 0);
+  const bar = $("#progress");
+  bar.hidden = !total;
+  if (!total) {
+    bar.innerHTML = "";
+    return;
+  }
+  bar.innerHTML =
+    `<span class="pfill" style="width:${Math.round((seen / total) * 100)}%"></span>` +
+    `<span class="ptext">${seen}/${total} viewed` +
+    ` <span class="a">+${add}</span> <span class="d">−${del}</span></span>`;
+}
+
+function syncViewedToggle() {
+  const box = $("#chkViewed");
+  if (box) box.checked = !!(S.selFile && isViewed(S.selFile));
+}
+
+/** Next file that has not been marked viewed, wrapping from the current one. */
+function nextUnviewed() {
+  const list = S.files.map((f) => f.path);
+  if (!list.length) return null;
+  const start = Math.max(0, list.indexOf(S.selFile));
+  for (let i = 1; i <= list.length; i++) {
+    const p = list[(start + i) % list.length];
+    if (!isViewed(p)) return p;
+  }
+  return null;
+}
+
 function fileRow(path, m, depth, label) {
   const sel = S.selFile === path ? " sel" : "";
   const code = m ? STATUS_CODE[m.status] || "M" : "";
   const n = S.ann.filter((a) => a.file === path).length;
+  const seen = m && isViewed(path) ? " seen" : "";
   const stat = m
     ? `<span class="stat"><span class="a">+${m.additions}</span> <span class="d">−${m.deletions}</span></span>`
     : "";
-  return `<div class="tnode${sel}" data-file="${esc(path)}" style="padding-left:${6 + depth * 12}px" title="${esc(path)}">
-    <span class="caret"></span>
+  let name;
+  if (label === null) {
+    // The filename is the point; keep the last couple of directories for
+    // disambiguation and drop the rest rather than letting a deep path push
+    // the filename out of the pane. Full path stays in the tooltip.
+    const parts = path.split("/");
+    const file = parts.pop();
+    const near = parts.slice(-2).join("/");
+    const prefix = parts.length ? (parts.length > 2 ? "…/" : "") + near + "/" : "";
+    name = `<span class="dir-prefix">${esc(prefix)}</span><b>${esc(file)}</b>`;
+  } else {
+    name = esc(label);
+  }
+  return `<div class="tnode${sel}${seen}" data-file="${esc(path)}" style="padding-left:${6 + depth * 12}px" title="${esc(path)}">
+    <span class="caret">${seen ? "✓" : ""}</span>
     ${code ? `<span class="st ${code}">${code === "q" ? "?" : code}</span>` : "📄"}
-    <span class="nm">${esc(label)}</span>
+    <span class="nm">${name}</span>
     ${n ? `<span class="cmt">🗨${n}</span>` : ""}
     ${stat}</div>`;
 }
@@ -529,6 +693,15 @@ $("#fileTree").addEventListener("click", (e) => {
   if (f) selectFile(f.dataset.file);
 });
 
+function setListMode(on) {
+  S.listMode = on;
+  $("#segList").classList.toggle("active", on);
+  $("#segTree").classList.toggle("active", !on);
+  renderFileTree();
+}
+$("#segList").onclick = () => setListMode(true);
+$("#segTree").onclick = () => setListMode(false);
+
 $("#fileFilter").addEventListener("input", (e) => {
   S.filter = e.target.value;
   renderFileTree();
@@ -537,16 +710,26 @@ $("#fileFilter").addEventListener("input", (e) => {
 // ---------------------------------------------------------------------------
 // diff loading + rendering
 // ---------------------------------------------------------------------------
+let loadTimer = null;
 async function selectFile(path) {
   S.selFile = path;
   S.expanded.clear();
   renderFileTree();
+  syncViewedToggle();
   if (S.tab === "commit") setTab("changes");
   $("#diffBody").scrollTop = 0;
+  // Most files land in well under 100ms; a spinner that fast reads as a flicker.
+  clearTimeout(loadTimer);
+  loadTimer = setTimeout(() => {
+    if (S.selFile === path && !S.diff && !S.fullRows) diffVL.setEmpty("Loading…");
+  }, 150);
 
+  S.diff = null;
+  S.fullRows = null;
   if (S.tab === "tree") {
     const { full } = await api("file", { ...scopeParams(), file: path }, { cached: true });
     if (S.selFile !== path) return;
+    clearTimeout(loadTimer);
     S.diff = null;
     S.fullRows = full && full.rows ? full.rows : null;
     S.fullMeta = full;
@@ -555,6 +738,7 @@ async function selectFile(path) {
   }
   const r = await api("diff", { ...scopeParams(), file: path, full: "1" }, { cached: true });
   if (S.selFile !== path) return;
+  clearTimeout(loadTimer);
   S.diff = r.diff;
   S.fullRows = r.full && r.full.rows ? r.full.rows : null;
   S.fullMeta = r.full;
@@ -640,10 +824,33 @@ function buildItems() {
   }
 
   const items = [];
+  const byLine = new Map();
+  for (const a of S.ann) {
+    if (a.file !== S.selFile) continue;
+    const k = a.side + ":" + a.line;
+    if (!byLine.has(k)) byLine.set(k, []);
+    byLine.get(k).push(a);
+  }
+  const pushRow = (u, i) => {
+    items.push({ k: "row", u, i });
+    if (!byLine.size) return;
+    // A comment belongs under the line it is about, so it reads like a thread.
+    const seen = new Set();
+    for (const [side, row] of [["old", u.l], ["new", u.r]]) {
+      const n = row && (side === "old" ? row.o : row.n);
+      if (n == null) continue;
+      for (const a of byLine.get(side + ":" + n) || []) {
+        if (seen.has(a.id)) continue;
+        seen.add(a.id);
+        items.push({ k: "comment", a });
+      }
+    }
+  };
+
   let i = 0;
   while (i < units.length) {
     if (keep[i]) {
-      items.push({ k: "row", u: units[i], i });
+      pushRow(units[i], i);
       i++;
       continue;
     }
@@ -651,7 +858,7 @@ function buildItems() {
     while (i < units.length && !keep[i]) i++;
     const id = "f" + start;
     if (S.expanded.has(id)) {
-      for (let j = start; j < i; j++) items.push({ k: "row", u: units[j], i: j });
+      for (let j = start; j < i; j++) pushRow(units[j], j);
     } else {
       items.push({ k: "fold", id, count: i - start, from: start, to: i });
     }
@@ -692,13 +899,32 @@ $("#diffBody").addEventListener(
   { passive: true }
 );
 
-function renderRowHtml(item, top) {
+function renderRowHtml(item, top, index) {
+  if (item.k === "comment") {
+    const a = item.a;
+    const h = CARD_HEAD + CARD_PAD + commentLines(a) * CARD_LINE;
+    return `<div class="cmtcard" style="top:${top}px;height:${h}px" data-cid="${a.id}">
+      <div class="cc-head">
+        <span class="lbl-pill${a.blocking ? " blocking" : ""}">${esc(a.label)}${a.blocking ? " · blocking" : ""}</span>
+        <span class="cc-loc">${a.side === "old" ? "old " : ""}L${a.line}</span>
+        <span class="grow"></span>
+        <button class="cc-act" data-edit="${a.id}">edit</button>
+        <button class="cc-act" data-del="${a.id}">delete</button>
+      </div>
+      <div class="cc-body" style="-webkit-line-clamp:${commentLines(a)}">${esc(a.body)}${
+        a.suggestion ? `<span class="cc-sug">↳ suggested: ${esc(a.suggestion.split("\n")[0])}</span>` : ""
+      }</div>
+    </div>`;
+  }
   if (item.k === "fold") {
     return `<div class="fold" style="top:${top}px" data-fold="${item.id}">
       <span>⌄</span> ${item.count} unmodified line${item.count === 1 ? "" : "s"} — click to expand</div>`;
   }
   const u = item.u;
   const lang = extOf(S.selFile);
+  const hit = S.search.hitSet && S.search.hitSet.has(index)
+    ? S.search.hits[S.search.idx] === index ? " hit cur" : " hit"
+    : "";
   const idx = S.annIdx;
   const foc = S.focus;
 
@@ -717,7 +943,7 @@ function renderRowHtml(item, top) {
     const gutters = S.singleGutter
       ? gutHtml("new", r.n ?? r.o ?? null, cls)
       : gutHtml("old", r.o ?? null, cls) + gutHtml("new", r.n ?? null, cls);
-    return `<div class="drow${focused}" style="top:${top}px">
+    return `<div class="drow${focused}${hit}" style="top:${top}px">
       <div class="side only">
         ${gutters}
         <div class="txt ${cls}"><span class="pan">${HL.highlight(r.s, lang)}</span></div>
@@ -737,7 +963,7 @@ function renderRowHtml(item, top) {
   const rcls = u.t === "chg" ? "add" : "";
   const focL = foc && foc.side === "old" && L && foc.line === L.o ? " focus" : "";
   const focR = foc && foc.side === "new" && R && foc.line === R.n ? " focus" : "";
-  return `<div class="drow${focL || focR}" style="top:${top}px">
+  return `<div class="drow${focL || focR}${hit}" style="top:${top}px">
     <div class="side">
       ${gutHtml("old", L ? L.o ?? null : null, lcls)}
       <div class="txt ${L ? lcls : "empty"}"><span class="pan">${lh ?? ""}</span></div>
@@ -749,7 +975,33 @@ function renderRowHtml(item, top) {
   </div>`;
 }
 
-const diffVL = vlist($("#diffBody"), ROW, () => S.items.length, (i, top) => renderRowHtml(S.items[i], top));
+/* Card height is derived, never measured: wrapping is estimated from the pane
+   width and the body is line-clamped to that estimate, so the prefix-sum index
+   stays exact and nothing jumps while scrolling. */
+const CARD_HEAD = 26;
+const CARD_LINE = 17;
+const CARD_PAD = 14;
+const CARD_MAX_LINES = 4;
+function commentLines(a) {
+  const cpl = Math.max(28, Math.floor(($("#diffBody").clientWidth - 150) / (S.uiCharW || 6.2)));
+  let n = 0;
+  for (const seg of String(a.body || "").split("\n")) n += Math.max(1, Math.ceil(seg.length / cpl));
+  if (a.suggestion) n += 1;
+  return Math.min(CARD_MAX_LINES, Math.max(1, n));
+}
+function itemHeight(i) {
+  const it = S.items[i];
+  if (!it) return ROW;
+  return it.k === "comment" ? CARD_HEAD + CARD_PAD + commentLines(it.a) * CARD_LINE : ROW;
+}
+
+const diffVL = vlist(
+  $("#diffBody"),
+  ROW,
+  () => S.items.length,
+  (i, top) => renderRowHtml(S.items[i], top, i),
+  itemHeight
+);
 
 function renderDiff() {
   S.annIdx = annIndex();
@@ -762,7 +1014,14 @@ function renderDiff() {
   if (!path) {
     head.innerHTML = "";
     S.items = [];
-    diffVL.setEmpty("Nothing to show.");
+    const base = S.ov.base && S.ov.base.ref;
+    diffVL.setEmpty(
+      S.scope.type === "worktree"
+        ? `Working tree is clean — nothing uncommitted to review.<br><span class="hint">` +
+          (base ? `Try <b>vs ${esc(base)}</b> for the whole branch, or ` : `Try `) +
+          `<b>All Commits</b> to review a single commit.</span>`
+        : `No changes in this scope.`
+    );
     return;
   }
 
@@ -771,17 +1030,43 @@ function renderDiff() {
     ${f ? `<span class="plus">+${f.additions}</span><span class="minus">−${f.deletions}</span>` : ""}
     ${f && f.oldPath ? `<span style="color:var(--muted)">← ${esc(f.oldPath)}</span>` : ""}
     <span class="grow"></span>
+    ${(() => {
+      // Position is about progress through the review, so it only means
+      // something in the changed-files list — not while browsing the repo.
+      if (S.tab === "tree") return "";
+      const i = S.files.findIndex((x) => x.path === path);
+      return i >= 0 ? `<span class="pos">${i + 1} of ${S.files.length}</span>` : "";
+    })()}
     <div class="nav"><button data-nav="prev" title="Previous change (p)">▲</button><button data-nav="next" title="Next change (n)">▼</button></div>`;
 
-  const bad =
-    (S.diff && (S.diff.binary || S.diff.tooBig)) || (S.fullMeta && (S.fullMeta.binary || S.fullMeta.tooBig));
-  if (bad) {
+  const meta = S.diff || S.fullMeta || {};
+  const alt = S.fullMeta || {};
+  const problem =
+    meta.error || alt.error
+      ? `Could not read this file.<br><span class="hint">${esc(meta.error || alt.error)}</span>`
+      : meta.binary || alt.binary
+      ? "Binary file — nothing to diff."
+      : meta.tooBig || alt.tooBig
+      ? `Diff is too large to render${meta.changed ? ` (${meta.changed.toLocaleString()} changed lines)` : ""}.` +
+        `<br><span class="hint">Review it in your editor instead.</span>`
+      : meta.empty && !(S.fullRows && S.fullRows.length)
+      ? f && f.status === "deleted"
+        ? "File deleted — it was empty."
+        : "Empty file."
+      : null;
+  if (problem) {
     S.items = [];
-    diffVL.setEmpty(S.diff && S.diff.binary ? "Binary file" : "File too large to display");
+    diffVL.setEmpty(problem);
     return;
   }
 
   buildItems();
+  if (S.search.q) {
+    const q = S.search.q;
+    S.search.hitSet = null;
+    runSearch(q);
+    return;
+  }
   diffVL.refresh();
 }
 
@@ -791,6 +1076,18 @@ $("#diffBody").addEventListener("click", (e) => {
     S.expanded.add(fold.dataset.fold);
     buildItems();
     diffVL.refresh();
+    return;
+  }
+  const del = e.target.closest("[data-del]");
+  if (del) {
+    S.ann = S.ann.filter((a) => a.id !== del.dataset.del);
+    afterAnnChange();
+    return;
+  }
+  const edit = e.target.closest("[data-edit]");
+  if (edit) {
+    const a = S.ann.find((x) => x.id === edit.dataset.edit);
+    if (a) openPopover(edit, a.file, a.side, a.line);
     return;
   }
   const gut = e.target.closest(".gut[data-line]");
@@ -821,14 +1118,119 @@ function jumpChange(dir) {
   }
 }
 
+/* Windowing means only ~60 rows exist in the DOM, so the browser's own Find
+   cannot see the file. Search has to be ours. */
+function runSearch(q) {
+  S.search.q = q;
+  const needle = q.toLowerCase();
+  const hits = [];
+  if (needle) {
+    for (let i = 0; i < S.items.length; i++) {
+      const it = S.items[i];
+      if (it.k !== "row") continue;
+      const a = it.u.l && it.u.l.s;
+      const b = it.u.r && it.u.r.s;
+      if ((a && a.toLowerCase().includes(needle)) || (b && b.toLowerCase().includes(needle))) hits.push(i);
+    }
+  }
+  S.search.hits = hits;
+  S.search.hitSet = new Set(hits);
+  S.search.idx = 0;
+  $("#searchCount").textContent = hits.length ? `1/${hits.length}` : q ? "no matches" : "";
+  if (hits.length) diffVL.scrollToIndex(hits[0], true);
+  diffVL.refresh();
+}
+function stepSearch(d) {
+  const h = S.search.hits;
+  if (!h.length) return;
+  S.search.idx = (S.search.idx + d + h.length) % h.length;
+  $("#searchCount").textContent = `${S.search.idx + 1}/${h.length}`;
+  diffVL.scrollToIndex(h[S.search.idx], true);
+  diffVL.refresh();
+}
+function openSearch() {
+  $("#searchBar").hidden = false;
+  $("#searchInput").select();
+  $("#searchInput").focus();
+}
+function closeSearch() {
+  $("#searchBar").hidden = true;
+  S.search = { q: "", hits: [], idx: 0 };
+  diffVL.refresh();
+}
+$("#searchInput").addEventListener("input", (e) => runSearch(e.target.value));
+$("#searchInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    stepSearch(e.shiftKey ? -1 : 1);
+  } else if (e.key === "Escape") {
+    closeSearch();
+  }
+});
+$("#searchNext").onclick = () => stepSearch(1);
+$("#searchPrev").onclick = () => stepSearch(-1);
+$("#searchClose").onclick = closeSearch;
+
+/* A line cursor so a review can be driven without ever reaching for the mouse. */
+function moveFocus(dir) {
+  const rows = [];
+  for (let i = 0; i < S.items.length; i++) if (S.items[i].k === "row") rows.push(i);
+  if (!rows.length) return;
+  const lineOf = (it) => (it.u.r && it.u.r.n != null ? { side: "new", line: it.u.r.n } : it.u.l && it.u.l.o != null ? { side: "old", line: it.u.l.o } : null);
+  let at = -1;
+  if (S.focus) {
+    at = rows.findIndex((i) => {
+      const l = lineOf(S.items[i]);
+      return l && l.side === S.focus.side && l.line === S.focus.line;
+    });
+  }
+  let next = at < 0 ? rows[0] : rows[Math.min(rows.length - 1, Math.max(0, rows.indexOf(rows[at]) + dir))];
+  if (at >= 0) {
+    const pos = rows.indexOf(rows[at]);
+    next = rows[Math.min(rows.length - 1, Math.max(0, pos + dir))];
+  }
+  const l = lineOf(S.items[next]);
+  if (!l) return;
+  S.focus = { file: S.selFile, side: l.side, line: l.line };
+  diffVL.scrollToIndex(next, false);
+  diffVL.refresh();
+}
+
+/** Comment on the focused line, scrolling it into the DOM first if needed. */
+function commentOnFocus() {
+  if (!S.focus) {
+    moveFocus(1);
+    if (!S.focus) return;
+  }
+  const find = () =>
+    [...document.querySelectorAll(".gut[data-line]")].find(
+      (x) => +x.dataset.line === S.focus.line && x.dataset.side === S.focus.side
+    );
+  let g = find();
+  if (!g) {
+    const i = S.items.findIndex(
+      (it) =>
+        it.k === "row" &&
+        ((S.focus.side === "new" && it.u.r && it.u.r.n === S.focus.line) ||
+          (S.focus.side === "old" && it.u.l && it.u.l.o === S.focus.line))
+    );
+    if (i >= 0) diffVL.scrollToIndex(i, true);
+    g = find();
+  }
+  if (g) openPopover(g, S.selFile, S.focus.side, S.focus.line);
+}
+
 // ---------------------------------------------------------------------------
 // tabs / view toggles
 // ---------------------------------------------------------------------------
 function setTab(tab) {
   S.tab = tab;
+  // 12k paths are only navigable as a tree; a 50-file review is a list.
+  setListMode(tab !== "tree");
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
   $("#commitDetail").hidden = tab !== "commit";
   $("#diffTools").style.visibility = tab === "commit" ? "hidden" : "visible";
+  $("#chkViewed").parentElement.hidden = tab === "tree";
   if (tab === "tree" && !S.treePaths) {
     api("tree", scopeParams(), { cached: true }).then(({ paths }) => {
       S.treePaths = paths;
@@ -848,6 +1250,15 @@ function setView(v) {
   $("#segUnified").classList.toggle("active", v === "unified");
   renderDiff();
 }
+$("#chkViewed").onchange = (e) => toggleViewed(e.target.checked);
+function toggleViewed(on) {
+  if (!S.selFile) return;
+  setViewed(S.selFile, on);
+  if (!on) return;
+  const nx = nextUnviewed();
+  if (nx) selectFile(nx);
+}
+
 $("#chkFull").onchange = (e) => {
   S.full = e.target.checked;
   renderDiff();
@@ -859,13 +1270,17 @@ $("#chkFull").onchange = (e) => {
 const DRAFT_KEY = () => "diffotator:" + (S.ov ? S.ov.root : "");
 function saveDraft() {
   try {
-    localStorage.setItem(DRAFT_KEY(), JSON.stringify(S.ann));
+    localStorage.setItem(DRAFT_KEY(), JSON.stringify({ ann: S.ann, viewed: [...S.viewed] }));
   } catch {}
 }
 function loadDraft() {
   try {
     const raw = localStorage.getItem(DRAFT_KEY());
-    if (raw) S.ann = JSON.parse(raw) || [];
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    // v0 stored a bare array of annotations
+    S.ann = (Array.isArray(d) ? d : d.ann) || [];
+    S.viewed = new Set((Array.isArray(d) ? [] : d.viewed) || []);
   } catch {}
 }
 
@@ -1009,14 +1424,20 @@ $("#btnComments").onclick = () => {
 let pendingDecision = "annotated";
 function openModal(decision) {
   pendingDecision = decision;
+  $("#modalSummary").hidden = false;
+  $("#modalConfirm").classList.remove("danger-btn");
+  $("#modalConfirm").disabled = false;
   const n = S.ann.length;
   $("#modalTitle").textContent = decision === "approved" ? "Approve" : "Send feedback";
+  const seen = S.files.filter((x) => isViewed(x.path)).length;
+  const coverage = S.files.length ? ` You viewed ${seen} of ${S.files.length} files.` : "";
   $("#modalSub").textContent =
     decision === "approved"
-      ? n
-        ? `Approving with ${n} comment${n === 1 ? "" : "s"} attached.`
-        : "The agent will be told you approved and will proceed."
-      : `${n} comment${n === 1 ? "" : "s"} will be sent to your agent session.`;
+      ? (n ? `Approving with ${n} comment${n === 1 ? "" : "s"} attached.` : "The agent will be told you approved and will proceed.") + coverage
+      : n
+      ? `${n} comment${n === 1 ? "" : "s"} will be sent to your agent session.` + coverage
+      : "No line comments yet — write an overall summary below, or use Approve instead.";
+  $("#modalConfirm").disabled = decision !== "approved" && !n && !$("#modalSummary").value.trim();
   $("#modalConfirm").textContent = decision === "approved" ? "Approve" : "Send to agent";
   $("#modalList").innerHTML = S.ann
     .map(
@@ -1028,11 +1449,32 @@ function openModal(decision) {
   $("#modal").hidden = false;
   $("#modalSummary").focus();
 }
+$("#modalSummary").addEventListener("input", () => {
+  if (pendingDecision === "annotated") $("#modalConfirm").disabled = !S.ann.length && !$("#modalSummary").value.trim();
+});
 $("#btnSend").onclick = () => openModal("annotated");
 $("#btnApprove").onclick = () => openModal("approved");
 $("#modalCancel").onclick = () => ($("#modal").hidden = true);
 $("#modalConfirm").onclick = () => submit(pendingDecision);
-$("#btnClose").onclick = () => submit("dismissed");
+$("#btnClose").onclick = () => {
+  if (S.ann.length && !confirmDiscard()) return;
+  submit("dismissed");
+};
+/* Closing throws away every comment written so far and the agent hears nothing.
+   Worth one interstitial rather than a silent loss. */
+function confirmDiscard() {
+  const n = S.ann.length;
+  $("#modalTitle").textContent = "Discard " + n + " comment" + (n === 1 ? "" : "s") + "?";
+  $("#modalSub").textContent =
+    "Closing sends nothing to the agent. Use “Send feedback” if you want these delivered.";
+  $("#modalConfirm").textContent = "Discard and close";
+  $("#modalConfirm").classList.add("danger-btn");
+  $("#modalSummary").hidden = true;
+  $("#modalList").innerHTML = "";
+  $("#modal").hidden = false;
+  pendingDecision = "dismissed";
+  return false;
+}
 
 async function submit(decision) {
   $("#modal").hidden = true;
@@ -1101,11 +1543,22 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key === "Escape") {
     if (!$("#popover").hidden) return closePopover();
+    if (!$("#searchBar").hidden) return closeSearch();
     if (!$("#modal").hidden) return ($("#modal").hidden = true);
     if (!$("#helpSheet").hidden) return ($("#helpSheet").hidden = true);
     return;
   }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+    e.preventDefault();
+    openSearch();
+    return;
+  }
   if (typing) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    moveFocus(e.key === "ArrowDown" ? 1 : -1);
+    return;
+  }
   const files = S.tab === "tree" ? S.treePaths || [] : S.files.map((f) => f.path);
   const i = files.indexOf(S.selFile);
   switch (e.key) {
@@ -1128,6 +1581,9 @@ document.addEventListener("keydown", (e) => {
       $("#chkFull").checked = !$("#chkFull").checked;
       $("#chkFull").onchange({ target: $("#chkFull") });
       break;
+    case "v":
+      toggleViewed(!isViewed(S.selFile));
+      break;
     case "t":
       $("#btnComments").click();
       break;
@@ -1138,14 +1594,9 @@ document.addEventListener("keydown", (e) => {
       e.preventDefault();
       $("#fileFilter").focus();
       break;
-    case "c": {
-      if (!S.focus) break;
-      const g = [...document.querySelectorAll(".gut[data-line]")].find(
-        (x) => +x.dataset.line === S.focus.line && x.dataset.side === S.focus.side
-      );
-      if (g) openPopover(g, S.selFile, S.focus.side, S.focus.line);
+    case "c":
+      commentOnFocus();
       break;
-    }
   }
 });
 
