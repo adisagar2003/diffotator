@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docs — diffotator</title>
+<meta name="description" content="Install diffotator, wire it into Claude Code, and learn the review loop, scopes, comment labels, keyboard shortcuts and CLI flags.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%234fae63'/><path d='M32 0v32H0z' fill='%23d1596a'/></svg>">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <nav>
+    <a class="brand" href="/"><span class="mark"></span>diffotator</a>
+    <span class="sp"></span>
+    <a class="navlink" href="/">Home</a>
+    <a class="navlink on" href="/docs">Docs</a>
+  </nav>
+</header>
+
+<div class="wrap docs">
+  <aside class="toc">
+    <div>Start</div>
+    <a href="#requirements">Requirements</a>
+    <a href="#install">Install</a>
+    <a href="#claude-code">Claude Code</a>
+    <div>Using it</div>
+    <a href="#scopes">Scopes</a>
+    <a href="#loop">The review loop</a>
+    <a href="#comments">Comments</a>
+    <a href="#browsing">Browsing files</a>
+    <a href="#keys">Keyboard</a>
+    <div>Reference</div>
+    <a href="#cli">CLI</a>
+    <a href="#output">Output contract</a>
+    <a href="#perf">How it stays fast</a>
+    <a href="#limits">Limits</a>
+    <a href="#troubleshooting">Troubleshooting</a>
+  </aside>
+
+  <main class="doc">
+
+  <section id="requirements">
+    <h2>Requirements</h2>
+    <p>Node 18 or newer, and <code>git</code> on your <code>PATH</code>. That's the whole list —
+       diffotator has no npm dependencies.</p>
+    <p class="dim">macOS, Linux and Windows. The browser is whatever <code>open</code> /
+       <code>xdg-open</code> / <code>start</code> launches.</p>
+  </section>
+
+  <section id="install">
+    <h2>Install</h2>
+    <p>Clone the repository, then link the binary and the slash command:</p>
+<pre><code><span class="c"># from the repo you cloned</span>
+ln -sf "$PWD/bin/diffotator.js" ~/.local/bin/diffotator
+cp claude/diffotator.md ~/.claude/commands/diffotator.md</code></pre>
+    <p>Check it resolves:</p>
+<pre><code>$ diffotator --help</code></pre>
+    <div class="note">
+      <b>Make sure <code>~/.local/bin</code> is on your PATH.</b> If <code>diffotator</code> isn't
+      found, add <code>export PATH="$HOME/.local/bin:$PATH"</code> to your shell profile.
+    </div>
+    <p>Run the test suite if you want to confirm the git layer behaves on your machine:</p>
+<pre><code>$ node test.js
+ok — all checks passed</code></pre>
+  </section>
+
+  <section id="claude-code">
+    <h2>Claude Code integration</h2>
+    <p>The integration is one slash command. <code>claude/diffotator.md</code> installs as
+       <code>/diffotator</code> and tells Claude to run the CLI in the background, wait, and act on
+       whatever comes back:</p>
+<pre><code><span class="c">---</span>
+<span class="k">description</span>: Open the current diff in diffotator for review
+<span class="k">allowed-tools</span>: Bash(diffotator:*)
+<span class="c">---</span>
+
+Run `diffotator $ARGUMENTS` in the background (it blocks until the review
+session is submitted, which can exceed the Bash timeout)…</code></pre>
+    <p>Then in any session:</p>
+<pre><code>/diffotator
+/diffotator --base origin/main</code></pre>
+    <p>The CLI prints its URL on <b>stderr</b> and the review result on <b>stdout</b>, so the
+       feedback arrives clean. It blocks until you submit, then exits.</p>
+    <div class="note">
+      <b>Other agents work too.</b> Nothing here is Claude-specific — any harness that can run a
+      command and read its stdout can use diffotator. The slash command is just the thinnest
+      possible wrapper around that contract.
+    </div>
+  </section>
+
+  <section id="scopes">
+    <h2>Scopes</h2>
+    <p>A <b>scope</b> is what you're reviewing. The sidebar offers three, and everything downstream —
+       the file list, the diffs, the file tree — is expressed in terms of the one you pick.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th style="width:210px">Scope</th><th>Shows</th></tr></thead>
+        <tbody>
+          <tr><td><b>Local Changes</b></td>
+              <td>Working tree vs <code>HEAD</code>, including untracked files. The default, and
+                  what you want straight after an agent run.</td></tr>
+          <tr><td><b>vs &lt;base&gt;</b></td>
+              <td>The whole branch against its base, auto-detected from your upstream then
+                  <code>origin/main</code>, <code>origin/master</code>, <code>origin/develop</code>.
+                  Override with <code>--base</code>.</td></tr>
+          <tr><td><b>All Commits</b></td>
+              <td>The commit graph. Selecting a commit reviews that commit alone, against its first
+                  parent.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Below those, the sidebar lists worktrees, branches, tags, stashes and remotes. Selecting one
+       loads its history into the commit list.</p>
+    <div class="note">
+      <b>Base detection skips your own remote branch.</b> <code>origin/&lt;your-branch&gt;</code> is
+      the same line of work, so diffing against it only shows what you haven't pushed — not a
+      review.
+    </div>
+  </section>
+
+  <section id="loop">
+    <h2>The review loop</h2>
+    <p>Built for the case where an agent just touched fifty files:</p>
+    <ol>
+      <li>Read the file. <kbd>n</kbd> and <kbd>p</kbd> jump between changes inside it.</li>
+      <li>Something wrong? <kbd>c</kbd> on the focused line, or click any line number.</li>
+      <li><kbd>v</kbd> marks the file viewed and jumps to the next unviewed one.</li>
+      <li>Repeat until the progress bar reads <code>56/56</code>.</li>
+      <li><b>Send feedback</b>, or <b>Approve</b> if there's nothing to say.</li>
+    </ol>
+    <p>Viewed files dim with a ✓ and the header tracks
+       <code>12/56 viewed +2,341 −187</code>. Viewed state is kept <b>per scope</b> — having read a
+       file in the working tree isn't the same as having read it in a commit.</p>
+    <p>Progress and unsent comments survive a reload; they're kept in <code>localStorage</code>,
+       keyed to the repository.</p>
+  </section>
+
+  <section id="comments">
+    <h2>Comments</h2>
+    <p>Click any line number in either gutter, or press <kbd>c</kbd>. Labels follow
+       <a href="https://conventionalcomments.org">Conventional Comments</a>:</p>
+    <p class="dim"><code>suggestion</code> <code>nit</code> <code>question</code> <code>issue</code>
+       <code>praise</code> <code>thought</code> <code>note</code> <code>todo</code>
+       <code>chore</code></p>
+    <ul class="plain">
+      <li><b>Blocking flag.</b> Blocking comments are counted and called out at the top of the
+          feedback, and the agent is told they must be resolved.</li>
+      <li><b>Suggested code.</b> An optional replacement block, delivered as a fenced code block
+          alongside the comment.</li>
+      <li><b>Old or new side.</b> Commenting on a deleted line is recorded as
+          <code>(old side)</code> so the agent knows which version you mean.</li>
+    </ul>
+    <p>Saved comments render inline under the line they discuss, with edit and delete. The
+       <b>Comments</b> panel lists them all and jumps to any one — including comments on files
+       outside the current change set.</p>
+    <div class="note warn">
+      <b>Closing discards.</b> <b>Close</b> sends nothing to the agent. If you have unsent comments
+      it asks first, but there's no draft handoff — use <b>Send feedback</b> to deliver them.
+    </div>
+  </section>
+
+  <section id="browsing">
+    <h2>Browsing beyond the diff</h2>
+    <p>Three tabs sit under the commit list:</p>
+    <ul class="plain">
+      <li><b>Changes</b> — the changed files for the current scope, plus the diff.</li>
+      <li><b>Commit</b> — author, date, refs, sha, parents and the full message.</li>
+      <li><b>File Tree</b> — every file in the repository at that revision, including untracked
+          ones. Open any file and comment on it, even if the change never touched it.</li>
+    </ul>
+    <p>The file pane is a flat <b>List</b> by default, because reviewing is working through a list.
+       Switch to <b>Tree</b> for the repo browser; single-child directory chains fold into one row
+       either way.</p>
+    <p><b>Full file</b> keeps the diff marks and stops folding, so you can read a change in the
+       context of everything around it.</p>
+  </section>
+
+  <section id="keys">
+    <h2>Keyboard</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th style="width:150px">Key</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td><kbd>j</kbd> <kbd>k</kbd></td><td>Next / previous file</td></tr>
+          <tr><td><kbd>n</kbd> <kbd>p</kbd></td><td>Next / previous change in the file</td></tr>
+          <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Move the line cursor</td></tr>
+          <tr><td><kbd>c</kbd></td><td>Comment on the focused line</td></tr>
+          <tr><td><kbd>v</kbd></td><td>Mark viewed, jump to next unviewed</td></tr>
+          <tr><td><kbd>s</kbd></td><td>Split / unified</td></tr>
+          <tr><td><kbd>f</kbd></td><td>Full file / diff only</td></tr>
+          <tr><td><kbd>t</kbd></td><td>Comments panel</td></tr>
+          <tr><td><kbd>/</kbd></td><td>Filter the file list</td></tr>
+          <tr><td><kbd>⌘F</kbd></td><td>Find in the current file</td></tr>
+          <tr><td><kbd>⌘↵</kbd></td><td>Save comment, or send the review</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Close the popover, search or dialog</td></tr>
+          <tr><td><kbd>?</kbd></td><td>Shortcut sheet</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">
+      <b>Why <kbd>⌘F</kbd> is ours.</b> Only the visible rows exist in the DOM, so the browser's own
+      Find genuinely can't see the rest of the file. The built-in search scans the whole file and
+      steps through matches.
+    </div>
+  </section>
+
+  <section id="cli">
+    <h2>CLI</h2>
+<pre><code>diffotator [review] [options]</code></pre>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th style="width:210px">Flag</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">-C, --cwd &lt;dir&gt;</td><td>Repository to review. Default: current directory.</td></tr>
+          <tr><td class="mono">-b, --base &lt;ref&gt;</td><td>Base ref for the branch scope. Default: auto-detected.</td></tr>
+          <tr><td class="mono">-p, --port &lt;n&gt;</td><td>Port to listen on. Default: a random free port.</td></tr>
+          <tr><td class="mono">--no-open</td><td>Don't launch a browser; just print the URL.</td></tr>
+          <tr><td class="mono">--title &lt;s&gt;</td><td>Header title for the session.</td></tr>
+          <tr><td class="mono">-h, --help</td><td>Usage.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>Reviewing a pull or merge request</h3>
+    <p>There's no built-in fetching. Check it out locally and point diffotator at the base — this
+       also gets you the full working tree to browse, which a diff-only view can't:</p>
+<pre><code>gh pr checkout 123   <span class="c"># or: glab mr checkout 123</span>
+diffotator --base origin/main</code></pre>
+    <p>The server binds to <code>127.0.0.1</code> only.</p>
+  </section>
+
+  <section id="output">
+    <h2>Output contract</h2>
+    <p>diffotator blocks until you submit. The URL goes to stderr; the result goes to stdout.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th style="width:220px">You press</th><th>stdout</th></tr></thead>
+        <tbody>
+          <tr><td><b>Send feedback</b></td><td>A <code># Code review feedback</code> markdown document</td></tr>
+          <tr><td><b>Approve</b></td><td><code>The user approved.</code></td></tr>
+          <tr><td><b>Close</b> / <kbd>Ctrl-C</kbd></td><td><code>Review session closed without feedback.</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Exit code is <code>0</code> in every case — the outcome is in the text, not the status.
+       The document groups comments by file, orders them by line, and puts a blocking count above
+       the first one.</p>
+    <h3>Shape of the document</h3>
+<pre><code><span class="c"># Code review feedback</span>
+
+Reviewed `repo` — origin/main...HEAD. 2 comments.
+
+<span class="c">## Overall</span>
+
+&lt;your summary, if you wrote one&gt;
+
+&gt; <span class="k">**1 blocking comment**</span> — these must be resolved.
+
+<span class="c">## `path/to/file.ts`</span>
+
+<span class="c">### path/to/file.ts:23 — issue (blocking)</span>
+
+*L23*
+
+```ts
+&lt;the line you commented on&gt;
+```
+
+&lt;your comment&gt;
+
+Suggested replacement:
+
+```ts
+&lt;your suggested code, if any&gt;
+```
+
+<span class="c">---</span>
+
+Address every comment above…</code></pre>
+  </section>
+
+  <section id="perf">
+    <h2>How it stays fast</h2>
+    <p>The usual reason a browser diff viewer feels slow is that it ships the entire review to the
+       page as one document. diffotator sends nothing up front.</p>
+    <ul class="plain">
+      <li><b>Per-file, on demand.</b> Git data is fetched when you open a file, and the next file is
+          warmed in the background so <kbd>j</kbd> feels instant.</li>
+      <li><b>Windowed rows.</b> The commit list and the diff render only the visible slice. A
+          61,000-line minified diff opens with no stall.</li>
+      <li><b>Derived heights.</b> Code rows are uniform; inline comment cards get a height computed
+          from an estimated wrap rather than measured, so the prefix-sum index that drives
+          windowing stays exact and scrolling never jumps.</li>
+      <li><b>Highlighting on visible rows only</b>, from a small regex tokenizer — there's no
+          grammar bundle to download.</li>
+      <li><b>Full context in one call.</b> <code>git diff -U1000000</code> per file, so expanding
+          folded regions needs no round trip.</li>
+    </ul>
+  </section>
+
+  <section id="limits">
+    <h2>Limits</h2>
+    <p>Deliberately not built — use your git client:</p>
+    <p class="dim">Staging, committing, push and pull, rebase, blame, merge conflict resolution,
+       image diffs, and fetching pull requests from GitHub or GitLab.</p>
+    <h3>Known edges</h3>
+    <ul class="plain">
+      <li><b>Merge commits</b> are shown against their first parent — what the merge brought in.</li>
+      <li><b>Diffs over 200,000 changed lines</b> and <b>files over 4&nbsp;MB</b> are reported rather
+          than rendered.</li>
+      <li><b>Binary files</b> are detected and skipped; there's no image diff.</li>
+      <li><b>One session at a time per invocation.</b> Submitting ends the process — that's the
+          contract that lets the agent read the result.</li>
+    </ul>
+  </section>
+
+  <section id="troubleshooting">
+    <h2>Troubleshooting</h2>
+    <h3>"is not a git repository"</h3>
+    <p>diffotator resolves the repo root from the working directory. Use <code>-C</code> to point it
+       elsewhere.</p>
+
+    <h3>The "vs base" scope is missing</h3>
+    <p>No suitable base was found. Every candidate was either your own remote branch or had no
+       commits between it and <code>HEAD</code>. Pass one explicitly with
+       <code>--base origin/main</code>.</p>
+
+    <h3>The browser didn't open</h3>
+    <p>The URL is printed on stderr — open it by hand. <code>--no-open</code> makes that the
+       default behaviour.</p>
+
+    <h3>The command seems to hang</h3>
+    <p>That's the contract: it blocks until you submit in the browser, which is how the agent gets
+       your feedback. Run it in the background, or <kbd>Ctrl-C</kbd> to close the session without
+       sending anything.</p>
+
+    <h3>My comments disappeared</h3>
+    <p>Drafts are kept in <code>localStorage</code> per repository and cleared once a review is
+       submitted. A different browser or profile won't see them.</p>
+  </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="wrap row">
+    <span>diffotator — a local git review tool for coding agents.</span>
+    <span class="sp"></span>
+    <a href="/">Home</a>
+    <a href="#install">Install</a>
+  </div>
+</footer>
+</body>
+</html>

@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>diffotator — review your agent's diff in a real git client</title>
+<meta name="description" content="A Fork-style git diff viewer in your browser. Comment on any line, hit send, and the notes land in your Claude Code session as instructions it acts on. Zero dependencies.">
+<meta property="og:title" content="diffotator">
+<meta property="og:description" content="Review your agent's diff in a real git client. Comments go straight back to your coding agent.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%234fae63'/><path d='M32 0v32H0z' fill='%23d1596a'/></svg>">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <nav>
+    <a class="brand" href="/"><span class="mark"></span>diffotator</a>
+    <span class="sp"></span>
+    <a class="navlink" href="/docs">Docs</a>
+    <a class="navlink" href="/docs#install">Install</a>
+  </nav>
+</header>
+
+<div class="hero wrap">
+  <span class="eyebrow">git review · local · zero dependencies</span>
+  <h1>Review your agent's diff<br>in a real git client</h1>
+  <p class="sub">
+    diffotator opens a <b>Fork-style diff viewer</b> in your browser. Comment on any line,
+    hit send, and the notes land in your <b>Claude Code session</b> as instructions it acts on.
+  </p>
+  <div class="cta">
+    <div class="snippet">
+      <span class="dollar">$</span><span id="cmd">diffotator</span>
+      <button class="copy" data-copy="diffotator">Copy</button>
+    </div>
+    <a class="btn primary" href="/docs#install">Install</a>
+    <a class="btn" href="/docs">Read the docs</a>
+  </div>
+</div>
+
+<div class="shot">
+  <div class="shot-frame">
+    <img src="/screenshot.jpg" width="1560" height="786"
+         alt="diffotator reviewing a TypeScript change: file list on the left, split diff on the right, and an inline review comment threaded under the line it discusses.">
+  </div>
+  <p class="caption">Split diff, folded context, and a comment threaded under the line it's about.</p>
+</div>
+
+<section class="wrap">
+  <h2>Two tools, one gap</h2>
+  <p class="lede">
+    A desktop git client reads a diff beautifully and can't tell your agent anything.
+    A browser review tool can talk to your agent and tends to read badly. This is both halves.
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Traverse the whole repo</h3>
+      <p>Not just the changed lines. Walk commits, open any file at any revision, and comment on
+         code the diff never touched.</p>
+    </div>
+    <div class="card">
+      <h3>Comments become instructions</h3>
+      <p>Labels follow Conventional Comments, with a blocking flag and optional suggested code.
+         They arrive as markdown your agent acts on.</p>
+    </div>
+    <div class="card">
+      <h3>Nothing to install into your repo</h3>
+      <p>One Node process, no dependencies, no config, no service. It reads git and exits when
+         you're done.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2>The review loop</h2>
+  <p class="lede">
+    An agent run leaves you fifty changed files. The loop is <kbd>v</kbd> to mark a file reviewed and
+    jump to the next unviewed one, <kbd>c</kbd> when something looks wrong, repeat. The header
+    tracks how far you've got.
+  </p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th style="width:180px">Key</th><th>Does</th></tr></thead>
+      <tbody>
+        <tr><td><kbd>v</kbd></td><td>Mark viewed and jump to the next unviewed file</td></tr>
+        <tr><td><kbd>j</kbd> <kbd>k</kbd></td><td>Next / previous file</td></tr>
+        <tr><td><kbd>n</kbd> <kbd>p</kbd></td><td>Next / previous change within the file</td></tr>
+        <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Move the line cursor</td></tr>
+        <tr><td><kbd>c</kbd></td><td>Comment on the focused line</td></tr>
+        <tr><td><kbd>⌘F</kbd></td><td>Find in file — the browser's own Find can't see a windowed diff</td></tr>
+        <tr><td><kbd>⌘↵</kbd></td><td>Save the comment, or send the review</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2>What your agent receives</h2>
+  <p class="lede">
+    The CLI blocks until you submit. Whatever it prints on stdout becomes your agent's next input —
+    so a slash command is the whole integration.
+  </p>
+<pre><code><span class="c"># Code review feedback</span>
+
+Reviewed `checkout` — origin/main...HEAD. 1 comment.
+
+&gt; <span class="k">**1 blocking comment**</span> — these must be resolved.
+
+<span class="c">## `src/checkout/pricing.ts`</span>
+
+<span class="c">### src/checkout/pricing.ts:23 — issue (blocking)</span>
+
+*L23*
+
+```ts
+  <span class="a">return roundMinor(subtotal + tax - orderDiscount);</span>
+```
+
+Order discount is applied after tax here, but the doc comment says the
+authority treats it as a post-tax adjustment — pin that with a test.</code></pre>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th style="width:220px">You press</th><th>Agent gets on stdout</th></tr></thead>
+      <tbody>
+        <tr><td><b>Send feedback</b></td><td>The markdown above — grouped by file, blocking comments called out first</td></tr>
+        <tr><td><b>Approve</b></td><td><code>The user approved.</code></td></tr>
+        <tr><td><b>Close</b> or <kbd>Ctrl-C</kbd></td><td><code>Review session closed without feedback.</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2>Fast because it doesn't ship the review to you</h2>
+  <p class="lede">
+    Browser diff viewers usually inline the entire review into one HTML document — we measured one
+    session at 17&nbsp;MB. diffotator sends nothing up front and fetches one file at a time.
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <span class="num">0</span>
+      <h3>dependencies</h3>
+      <p>Node's standard library and <code>git</code>. No bundle to download, nothing to audit.</p>
+    </div>
+    <div class="card">
+      <span class="num">61k<small> lines</small></span>
+      <h3>diff, opens instantly</h3>
+      <p>Rows are windowed — only what's on screen exists in the DOM.</p>
+    </div>
+    <div class="card">
+      <span class="num">~50<small> ms</small></span>
+      <h3>per file</h3>
+      <p>One <code>git diff</code> per file, on demand. A 54-file list resolves in about 300&nbsp;ms.</p>
+    </div>
+  </div>
+
+  <h3>How</h3>
+  <ul class="plain">
+    <li><b>Nothing is inlined.</b> Git data is fetched per file as you open it.</li>
+    <li><b>Rows are windowed.</b> Commit list and diff render only the visible slice.</li>
+    <li><b>Heights are derived, never measured.</b> Uniform code rows plus a computed height for
+        inline comment cards, so a prefix-sum index stays exact and scrolling never jumps.</li>
+    <li><b>Highlighting runs on visible rows only</b>, from a small regex tokenizer instead of a
+        grammar bundle.</li>
+    <li><b>Full context up front.</b> One <code>git diff -U1000000</code> per file, so expanding
+        folded context costs nothing.</li>
+  </ul>
+</section>
+
+<section class="wrap">
+  <h2>Git shapes that bite</h2>
+  <p class="lede">
+    Most diff viewers are written against a straight line of ordinary commits. Each of these was a
+    real bug during development, and each one has a test.
+  </p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th style="width:230px">Shape</th><th>What goes wrong if you don't handle it</th></tr></thead>
+      <tbody>
+        <tr><td>Root commit</td><td><code>sha^!</code> has no parent to exclude — the diff comes out reversed</td></tr>
+        <tr><td>Merge commit</td><td><code>sha^!</code> excludes <em>every</em> parent, so the merge shows zero files</td></tr>
+        <tr><td>Rename</td><td><code>numstat</code> compresses the path to <code>{old =&gt; new}</code> — renames read +0/−0</td></tr>
+        <tr><td>CRLF file</td><td>a stray carriage return renders at the end of every line</td></tr>
+        <tr><td>File ending in a newline</td><td>a phantom empty last line</td></tr>
+        <tr><td>Binary</td><td>a blank pane instead of saying "binary"</td></tr>
+        <tr><td>Untracked</td><td>missing from the file tree — exactly the files an agent just wrote</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="dim" style="margin-top:18px;font-size:14.5px">
+    Commits resolve to an explicit two-dot pair against the first parent, or the repo's empty tree
+    at a root. That's also what makes a merge show what it merged in.
+  </p>
+</section>
+
+<section class="wrap">
+  <h2>Where it fits</h2>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th style="width:34%"></th><th>diffotator</th><th>Desktop git client</th><th>Browser review tool</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Browse commits, branches, stashes</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">Diff only</td></tr>
+        <tr><td>Open any file at any revision</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">No</td></tr>
+        <tr><td>Comment on a line</td><td class="yes">Yes</td><td class="no">No</td><td class="yes">Yes</td></tr>
+        <tr><td>Comment on untouched code</td><td class="yes">Yes</td><td class="no">No</td><td class="no">No</td></tr>
+        <tr><td>Feedback reaches your agent</td><td class="yes">Yes</td><td class="no">No</td><td class="yes">Yes</td></tr>
+        <tr><td>Commit, push, rebase, resolve conflicts</td><td class="no">No</td><td class="yes">Yes</td><td class="no">No</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="dim" style="margin-top:18px;font-size:14.5px">
+    It's a reviewer, not a git client replacement. Keep using Fork for the things Fork is for.
+  </p>
+</section>
+
+<section class="wrap" style="text-align:center">
+  <h2>Try it on your current branch</h2>
+  <p class="lede" style="margin:0 auto 28px">One command in any git repository.</p>
+  <div class="cta">
+    <div class="snippet">
+      <span class="dollar">$</span><span>diffotator --base origin/main</span>
+      <button class="copy" data-copy="diffotator --base origin/main">Copy</button>
+    </div>
+    <a class="btn primary" href="/docs#install">Install</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap row">
+    <span>diffotator — a local git review tool for coding agents.</span>
+    <span class="sp"></span>
+    <a href="/docs">Docs</a>
+    <a href="/docs#cli">CLI reference</a>
+  </div>
+</footer>
+
+<script>
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-copy]");
+  if (!b) return;
+  navigator.clipboard.writeText(b.dataset.copy).then(() => {
+    const t = b.textContent;
+    b.textContent = "Copied";
+    b.classList.add("done");
+    setTimeout(() => { b.textContent = t; b.classList.remove("done"); }, 1400);
+  });
+});
+</script>
+</body>
+</html>

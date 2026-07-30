@@ -1,0 +1,165 @@
+/* diffotator site — same palette as the tool, so the page and the product
+   read as one thing. No webfonts, no frameworks: nothing to download. */
+:root{
+  --bg:#141517; --bg2:#1b1c1e; --panel:#212326; --elev:#282a2e;
+  --border:#2e3136; --border-soft:#26282c;
+  --text:#e6e8ec; --dim:#9aa0a8; --muted:#71767e;
+  --accent:#5b98f8; --accent-dim:#2d4c7e;
+  --add:#4fae63; --del:#d1596a; --warn:#e8c877;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+  --wrap:1080px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--bg);color:var(--text);
+  font:16px/1.65 var(--ui);-webkit-font-smoothing:antialiased;
+}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code,kbd{font-family:var(--mono)}
+.wrap{max-width:var(--wrap);margin:0 auto;padding:0 24px}
+
+/* ---------- nav ---------- */
+header{
+  position:sticky;top:0;z-index:20;background:#141517e8;backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border)
+}
+nav{display:flex;align-items:center;gap:22px;height:56px;max-width:var(--wrap);margin:0 auto;padding:0 24px}
+.brand{display:flex;align-items:center;gap:9px;font-weight:650;letter-spacing:-.2px;color:var(--text);font-size:16px}
+.brand:hover{text-decoration:none}
+.mark{
+  width:19px;height:19px;border-radius:5px;flex:0 0 auto;
+  background:linear-gradient(150deg,var(--add) 0 48%,var(--del) 52% 100%)
+}
+nav .sp{flex:1}
+nav a.navlink{color:var(--dim);font-size:14.5px}
+nav a.navlink:hover{color:var(--text);text-decoration:none}
+nav a.navlink.on{color:var(--text)}
+
+/* ---------- hero ---------- */
+.hero{padding:82px 0 40px;text-align:center}
+.eyebrow{
+  display:inline-block;font:12px var(--mono);color:var(--dim);border:1px solid var(--border);
+  background:var(--panel);border-radius:20px;padding:4px 13px;margin-bottom:22px
+}
+h1{
+  font-size:clamp(34px,5.4vw,54px);line-height:1.08;letter-spacing:-1.4px;
+  margin:0 0 20px;font-weight:680
+}
+.sub{font-size:clamp(16px,2.2vw,19px);color:var(--dim);max-width:660px;margin:0 auto 34px;line-height:1.6}
+.sub b{color:var(--text);font-weight:600}
+
+.cta{display:flex;gap:11px;justify-content:center;align-items:center;flex-wrap:wrap}
+.snippet{
+  display:flex;align-items:center;gap:11px;background:var(--panel);border:1px solid var(--border);
+  border-radius:9px;padding:9px 9px 9px 15px;font:13.5px var(--mono);color:var(--text);text-align:left
+}
+.snippet .dollar{color:var(--muted);user-select:none}
+.copy{
+  border:1px solid var(--border);background:var(--elev);color:var(--dim);border-radius:6px;
+  padding:4px 10px;font:12px var(--ui);cursor:pointer;transition:.12s
+}
+.copy:hover{color:var(--text);border-color:var(--accent-dim)}
+.copy.done{color:var(--add);border-color:var(--add)}
+.btn{
+  display:inline-block;border:1px solid var(--border);background:var(--elev);color:var(--text);
+  border-radius:9px;padding:11px 19px;font-size:14.5px;font-weight:500
+}
+.btn:hover{border-color:var(--accent-dim);text-decoration:none;background:var(--panel)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#0d1117;font-weight:600}
+.btn.primary:hover{background:#79abfa;border-color:#79abfa}
+
+/* ---------- shot ---------- */
+.shot{margin:52px auto 0;max-width:1180px;padding:0 24px}
+.shot-frame{
+  border:1px solid var(--border);border-radius:13px;overflow:hidden;background:var(--bg2);
+  box-shadow:0 30px 80px -30px #000c, 0 0 0 1px #ffffff08
+}
+.shot-frame img{display:block;width:100%;height:auto}
+.caption{text-align:center;color:var(--muted);font-size:13px;margin-top:14px}
+
+/* ---------- sections ---------- */
+section{padding:74px 0}
+section + section{border-top:1px solid var(--border-soft)}
+h2{font-size:clamp(24px,3.4vw,31px);letter-spacing:-.7px;margin:0 0 12px;font-weight:650}
+h3{font-size:17px;margin:30px 0 8px;font-weight:620;letter-spacing:-.2px}
+.lede{color:var(--dim);max-width:680px;margin:0 0 34px;font-size:16.5px}
+p{margin:0 0 15px}
+.dim{color:var(--dim)}
+
+.grid{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(268px,1fr))}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:20px 21px}
+.card h3{margin:0 0 7px;font-size:15.5px}
+.card p{color:var(--dim);font-size:14.5px;margin:0}
+.card .num{font:26px var(--mono);color:var(--text);display:block;margin-bottom:2px;letter-spacing:-1px}
+.card .num small{font-size:14px;color:var(--muted);letter-spacing:0}
+
+/* ---------- tables ---------- */
+.tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:11px;background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:560px}
+th,td{text-align:left;padding:11px 16px;border-bottom:1px solid var(--border-soft);vertical-align:top}
+thead th{
+  color:var(--muted);font:11.5px var(--ui);text-transform:uppercase;letter-spacing:.7px;
+  font-weight:600;background:var(--bg2)
+}
+tbody tr:last-child td{border-bottom:0}
+td code{font-size:13px;color:var(--text);background:var(--elev);padding:1px 6px;border-radius:4px}
+.yes{color:var(--add)}.no{color:var(--muted)}
+td.mono{font-family:var(--mono);font-size:13px}
+
+/* ---------- code blocks ---------- */
+pre{
+  background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:15px 17px;
+  overflow-x:auto;font:13.2px/1.62 var(--mono);margin:0 0 18px
+}
+pre code{color:var(--text)}
+.c{color:var(--muted)}.k{color:#c792ea}.s{color:#c3e88d}.a{color:var(--add)}.d{color:var(--del)}
+p code,li code{background:var(--elev);border:1px solid var(--border-soft);border-radius:4px;padding:1px 5px;font-size:13.5px}
+kbd{
+  background:var(--elev);border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;
+  padding:1px 6px;font-size:12.5px;color:var(--text);white-space:nowrap
+}
+
+/* ---------- lists ---------- */
+ul.plain{list-style:none;padding:0;margin:0 0 18px}
+ul.plain li{padding-left:20px;position:relative;margin-bottom:9px;color:var(--dim)}
+ul.plain li::before{content:"→";position:absolute;left:0;color:var(--accent)}
+ul.plain li b{color:var(--text);font-weight:600}
+ol,ul{color:var(--dim)}
+li{margin-bottom:7px}
+li b{color:var(--text)}
+
+/* ---------- callout ---------- */
+.note{
+  border-left:3px solid var(--accent);background:#1a2130;border-radius:0 9px 9px 0;
+  padding:14px 18px;margin:0 0 20px;font-size:14.5px;color:var(--dim)
+}
+.note b{color:var(--text)}
+.note.warn{border-left-color:var(--warn);background:#231f14}
+
+/* ---------- docs layout ---------- */
+.docs{display:grid;grid-template-columns:212px 1fr;gap:48px;padding:44px 0 90px;align-items:start}
+.toc{position:sticky;top:80px;font-size:14px}
+.toc div{color:var(--muted);font:11.5px var(--ui);text-transform:uppercase;letter-spacing:.7px;margin:20px 0 8px;font-weight:600}
+.toc div:first-child{margin-top:0}
+.toc a{display:block;color:var(--dim);padding:3.5px 0}
+.toc a:hover{color:var(--text);text-decoration:none}
+.doc h2{margin-top:0;scroll-margin-top:78px}
+.doc section{padding:0 0 46px;border:0}
+.doc section + section{border-top:1px solid var(--border-soft);padding-top:42px}
+
+/* ---------- footer ---------- */
+footer{border-top:1px solid var(--border);padding:34px 0 54px;color:var(--muted);font-size:14px}
+footer .row{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
+footer .sp{flex:1}
+
+@media (max-width:820px){
+  .docs{grid-template-columns:1fr;gap:0}
+  .toc{position:static;display:flex;flex-wrap:wrap;gap:12px;margin-bottom:30px;
+       padding-bottom:20px;border-bottom:1px solid var(--border)}
+  .toc div{display:none}
+  section{padding:52px 0}
+  .hero{padding:56px 0 28px}
+}
