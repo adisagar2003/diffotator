@@ -16,6 +16,7 @@
     <span class="sp"></span>
     <a class="navlink" href="/">Home</a>
     <a class="navlink on" href="/docs">Docs</a>
+    <a class="navlink" href="https://github.com/adisagar2003/diffotator">GitHub ↗</a>
   </nav>
 </header>
 
@@ -52,10 +53,19 @@
 
   <section id="install">
     <h2>Install</h2>
-    <p>Clone the repository, then link the binary and the slash command:</p>
-<pre><code><span class="c"># from the repo you cloned</span>
+    <p>Clone the <a href="https://github.com/adisagar2003/diffotator">repository</a>, then link
+       the binary and the slash command:</p>
+<pre><code>git clone https://github.com/adisagar2003/diffotator.git
+cd diffotator
+
+<span class="c"># link the CLI and install the /diffotator command</span>
 ln -sf "$PWD/bin/diffotator.js" ~/.local/bin/diffotator
-cp claude/diffotator.md ~/.claude/commands/diffotator.md</code></pre>
+cp claude/diffotator.md ~/.claude/commands/diffotator.md
+
+<span class="c"># optional: open a review automatically after every turn</span>
+diffotator hook --install</code></pre>
+    <p>There is nothing to build and nothing to install into the repository you review —
+       the clone <i>is</i> the install.</p>
     <p>Check it resolves:</p>
 <pre><code>$ diffotator --help</code></pre>
     <div class="note">
@@ -160,6 +170,12 @@ Reviews open when a turn leaves 3+ changed files.</code></pre>
     </div>
     <p>Below those, the sidebar lists worktrees, branches, tags, stashes and remotes. Selecting one
        loads its history into the commit list.</p>
+    <div class="shot-frame">
+      <img src="/shot-commits.jpg" width="1560" height="820" loading="lazy"
+           alt="The All Commits scope: commit graph with branch lanes and refs, and the diff of the selected merge commit below it.">
+    </div>
+    <p class="caption">A merge selected in <b>All Commits</b> — shown against its first parent, so
+       you see what the merge brought in.</p>
     <div class="note">
       <b>Base detection skips your own remote branch.</b> <code>origin/&lt;your-branch&gt;</code> is
       the same line of work, so diffing against it only shows what you haven't pushed — not a
@@ -204,6 +220,12 @@ Reviews open when a turn leaves 3+ changed files.</code></pre>
       <li><b>Old or new side.</b> Commenting on a deleted line is recorded as
           <code>(old side)</code> so the agent knows which version you mean.</li>
     </ul>
+    <div class="shot-frame">
+      <img src="/shot-comment.jpg" width="1560" height="820" loading="lazy"
+           alt="The comment popover open on a line: label chips, the comment body, a blocking checkbox and a suggested replacement.">
+    </div>
+    <p class="caption">Label, body, blocking flag, suggested replacement — and the comment already
+       saved on this file rendered inline behind it.</p>
     <p>Saved comments render inline under the line they discuss, with edit and delete. The
        <b>Comments</b> panel lists them all and jumps to any one — including comments on files
        outside the current change set.</p>
@@ -414,6 +436,7 @@ Address every comment above…</code></pre>
     <span class="sp"></span>
     <a href="/">Home</a>
     <a href="#install">Install</a>
+    <a href="https://github.com/adisagar2003/diffotator">GitHub</a>
   </div>
 </footer>
 </body>

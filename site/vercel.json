@@ -4,7 +4,7 @@
   "trailingSlash": false,
   "headers": [
     {
-      "source": "/screenshot.jpg",
+      "source": "/(.*).jpg",
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=604800, immutable" }]
     }
   ]

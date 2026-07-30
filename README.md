@@ -1,19 +1,45 @@
+<div align="center">
+
 # diffotator
 
-Fork's diff viewer, Plannotator's agent loop.
+**Fork's diff viewer, Plannotator's agent loop.**
+
+Review your coding agent's work in a real git client — then send the comments
+straight back to the agent.
+
+[![docs](https://img.shields.io/badge/diffotator.vercel.app-4fae63?style=flat-square&label=docs)](https://diffotator.vercel.app)
+[![dependencies](https://img.shields.io/badge/dependencies-0-4fae63?style=flat-square)](package.json)
+[![node](https://img.shields.io/badge/node-%E2%89%A518-666?style=flat-square)](package.json)
+[![license](https://img.shields.io/badge/license-MIT-666?style=flat-square)](#license)
+
+<img src="site/screenshot.jpg" width="900" alt="diffotator reviewing a TypeScript change: file list on the left, split diff on the right, and a review comment threaded under the line it discusses">
+
+</div>
+
+## What it is
 
 Browse commits, files and diffs like [Fork](https://git-fork.com), annotate any line,
 hit **Send feedback** — the comments land in your Claude Code session as markdown the
 agent acts on. Same contract as [Plannotator](https://plannotator.ai), without the lag.
 
+- **A whole git client, not a diff blob.** Commits, branches, worktrees, stashes and
+  every file at any revision — so you can comment on code the change never touched.
+- **Comments are instructions.** [Conventional Comments](https://conventionalcomments.org)
+  labels, a blocking flag, optional suggested code, delivered as markdown on stdout.
+- **Nothing to install into your repo.** One Node process, no dependencies, no config.
+  It reads git and exits when you're done.
+
 ## Install
 
 ```sh
-ln -sf "$PWD/bin/diffotator.js" ~/.local/bin/diffotator
-cp claude/diffotator.md ~/.claude/commands/diffotator.md
+git clone https://github.com/adisagar2003/diffotator.git
+cd diffotator
+ln -sf "$PWD/bin/diffotator.js" ~/.local/bin/diffotator   # needs ~/.local/bin on PATH
+cp claude/diffotator.md ~/.claude/commands/diffotator.md  # the /diffotator command
+diffotator hook --install                                 # optional: auto-review, below
 ```
 
-No dependencies. Node 18+, git.
+No dependencies. Node 18+, git. `node test.js` runs the checks.
 
 ## Use
 
@@ -26,31 +52,37 @@ diffotator -C ../other-repo
 From Claude Code: `/diffotator`. The CLI blocks until you submit; whatever it prints
 on stdout becomes the agent's next input.
 
-## Automatic review (Stop hook)
-
-A review tool you have to remember to run reviews nothing. Install the hook and
-every turn that leaves real changes gets looked at:
-
-```sh
-diffotator hook --install     # adds a Stop hook to ~/.claude/settings.json
-diffotator hook --uninstall   # removes it
-```
-
-Leaving blocking comments returns `{"decision":"block","reason":"<your review>"}`,
-which sends the agent back to work with your feedback as the reason. Approving lets
-the turn end.
-
-The hard part is *not* firing. It stays silent when the tree is clean, when fewer
-than `DIFFOTATOR_HOOK_MIN_FILES` (default 3) files changed, when the tree is
-byte-identical to what you last reviewed, and when the harness says a Stop hook
-already forced a continuation. `DIFFOTATOR_HOOK=off` disables it without
-uninstalling.
-
 | You do | Agent gets |
 |---|---|
 | **Send feedback** | `# Code review feedback` — grouped by file, blocking comments called out |
 | **Approve** | `The user approved.` |
 | **Close** / `Ctrl-C` | `Review session closed without feedback.` |
+
+<img src="site/shot-send.jpg" width="900" alt="The send dialog: an optional overall summary above the two comments about to be sent to the agent">
+
+No PR fetching: `gh pr checkout 123` (or `glab mr checkout 123`), then
+`diffotator --base origin/main`.
+
+## Reviews that fire by themselves
+
+A review tool you have to remember to run reviews only what you remember to review.
+`diffotator hook --install` adds a `Stop` hook to `~/.claude/settings.json` (backing that
+file up first), so every turn leaving real changes opens a review on its own. Blocking
+comments come back as the hook's `reason`, which sends the agent back to work with the
+review in hand instead of spending a fresh turn.
+
+The whole difficulty is *not* firing. It stays quiet when the tree is clean, when the
+turn touched fewer than three files, when nothing changed since the last review, and
+when the harness says a hook already blocked once — so it can't loop. "Nothing changed"
+is a hash of `git status` plus `git diff HEAD`, not a file list, so an edit in place
+re-opens the review while one more sentence from the agent doesn't.
+
+```sh
+DIFFOTATOR_HOOK=off             # disable without uninstalling
+DIFFOTATOR_HOOK_MIN_FILES=3     # fewest changed files that will open a review
+DIFFOTATOR_DEBUG=1              # log why a Stop was let through
+diffotator hook --uninstall     # remove it again
+```
 
 ## The review loop
 
@@ -59,32 +91,32 @@ tracks `12/56 viewed +2,341 −187`, viewed files dim with a ✓, and the diff h
 tells you where you are (`6 of 56`). That is the whole loop for a fifty-file agent
 run: `v v v`, stop when something looks wrong, `c` to comment, keep going.
 
-Comments render inline under the line they are about, with their label, blocking
-flag and edit/delete — so re-reading a file shows what you already said. Closing
-with unsent comments asks first.
+Click any line number to comment. Labels follow Conventional Comments — `suggestion`,
+`nit`, `question`, `issue`, `praise`, `thought`, `note`, `todo`, `chore` — plus a
+blocking flag and an optional suggested-code block.
+
+<img src="site/shot-comment.jpg" width="900" alt="The comment popover open on a line: label chips, comment body, blocking checkbox and a suggested replacement">
+
+Comments render inline under the line they are about, with their label, blocking flag
+and edit/delete — so re-reading a file shows what you already said. Unsent comments and
+viewed state live in `~/.local/share/diffotator` and are cleared when you submit; not in
+`localStorage`, which is scoped to the origin *including the port*, and every run binds
+a fresh one. Closing with unsent comments asks first.
 
 ## What's in the window
 
 Left sidebar: Local Changes, branch-vs-base (auto-detected), All Commits, worktrees,
 branches, tags, stashes, remotes. Top: commit graph with lanes, refs, author, sha, date.
 Bottom: **Changes** (changed files + diff), **Commit** (metadata + message), **File Tree**
-(every file in the repo at that revision).
+(every file in the repo at that revision, untracked ones included).
+
+<img src="site/shot-commits.jpg" width="900" alt="All Commits scope: commit graph with branch lanes and refs, and the diff of the selected merge commit below it">
 
 The changed-files pane is a flat **List** by default (reviewing is working a list)
 and a **Tree** for the 12k-path repo browser; single-child directory chains fold to
 one row either way. Split or unified, word-level intra-line diff, collapsed context
 you can expand, `Full file` to review a change in its surroundings, and the File Tree
 tab so you can comment on code the diff never touched.
-
-Click any line number to comment. Labels follow
-[Conventional Comments](https://conventionalcomments.org) — `suggestion`, `nit`,
-`question`, `issue`, `praise`, `thought`, `note`, `todo`, `chore` — plus a blocking
-flag and an optional suggested-code block.
-
-Unsent comments and viewed state persist to `~/.local/share/diffotator` and survive
-across runs. They deliberately do *not* live in `localStorage`: that is scoped to the
-origin **including the port**, and every run binds a new random port, so drafts
-written by one session were invisible to the next.
 
 ### Keys
 
@@ -113,8 +145,7 @@ This does the opposite:
 ## Not built
 
 Staging, committing, push/pull, rebase, blame, merge conflicts, image diffs — use Fork
-for those. No GitHub/GitLab PR fetching either: `glab mr checkout` / `gh pr checkout`
-then `diffotator --base origin/main`.
+for those. No GitHub/GitLab PR fetching either.
 
 ## Git shapes that bite
 
@@ -134,4 +165,12 @@ were all real bugs here, and each one has a test:
 Commits now resolve to an explicit two-dot pair against the first parent (or the
 empty tree at the root), which is also what makes a merge show what it merged in.
 
-`node test.js` runs the checks.
+## Links
+
+[Docs](https://diffotator.vercel.app/docs) ·
+[CLI reference](https://diffotator.vercel.app/docs#cli) ·
+[GitHub](https://github.com/adisagar2003/diffotator)
+
+## License
+
+MIT

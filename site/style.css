@@ -149,6 +149,8 @@ li b{color:var(--text)}
 .doc h2{margin-top:0;scroll-margin-top:78px}
 .doc section{padding:0 0 46px;border:0}
 .doc section + section{border-top:1px solid var(--border-soft);padding-top:42px}
+.doc .shot-frame{margin:20px 0 0;border-radius:9px;box-shadow:none}
+.doc .caption{text-align:left;margin:9px 0 0}
 
 /* ---------- footer ---------- */
 footer{border-top:1px solid var(--border);padding:34px 0 54px;color:var(--muted);font-size:14px}
