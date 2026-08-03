@@ -185,17 +185,23 @@ function parseLog(out) {
     });
 }
 
+/**
+ * `rev` and `file` arrive from a query string. `file` is safe because it goes
+ * after `--`; a bare `rev` is not — `git log --output=.git/config` truncates
+ * the file it names. Validate it here rather than at each caller: this is
+ * where a string stops being data and becomes a git argument.
+ */
 async function log(root, { limit = 200, skip = 0, rev = null, file = null, all = false } = {}) {
   const args = ["log", `--format=${LOG_FORMAT}`, `--max-count=${limit}`, `--skip=${skip}`];
   if (all) args.push("--all");
-  if (rev) args.push(rev);
+  if (rev) args.push(Scope.ref(rev, "rev"));
   if (file) args.push("--", file);
   // A repo with no commits legitimately has no log; anything else is a fault.
   return parseLog(await probe(root, args));
 }
 
 async function commitMeta(root, sha) {
-  const out = await git(root, ["show", "--no-patch", `--format=${LOG_FORMAT}`, sha]);
+  const out = await git(root, ["show", "--no-patch", `--format=${LOG_FORMAT}`, Scope.ref(sha, "sha")]);
   const [c] = parseLog(out);
   return c;
 }

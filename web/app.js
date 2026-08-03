@@ -464,7 +464,10 @@ async function setScope(scope, name, keepCommits) {
   render();
   // The File Tree pane is scope-specific and was just invalidated; without this
   // it stays empty until the reader happens to toggle tabs.
-  if (S.tab === "tree") await loadTree();
+  if (S.tab === "tree") {
+    await loadTree();
+    if (seq !== scopeSeq) return; // a newer scope won while the tree was in flight
+  }
   const first = files[0];
   if (first) selectFile(first.path);
 }
@@ -1038,9 +1041,16 @@ function setTab(tab) {
   else renderFileTree();
 }
 
-/** The whole repo at the current scope. Changing scope invalidates it. */
+/**
+ * The whole repo at the current scope. Changing scope invalidates it, and the
+ * guard lives here rather than at the two callers: `setTab` fires this without
+ * awaiting it, so a scope change mid-flight would otherwise land one revision's
+ * paths next to another revision's contents.
+ */
 async function loadTree() {
+  const seq = scopeSeq;
   const { paths } = await api("tree", scopeParams(), { cached: true });
+  if (seq !== scopeSeq) return;
   S.treePaths = paths;
   renderFileTree();
 }
