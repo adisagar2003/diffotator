@@ -44,8 +44,8 @@ function readStdin() {
  */
 async function fingerprint(root) {
   const [status, patch] = await Promise.all([
-    G.tryGit(root, ["status", "--porcelain"]),
-    G.tryGit(root, ["diff", "HEAD"]),
+    G.probe(root, ["status", "--porcelain"]),
+    G.probe(root, ["diff", "HEAD"]), // no HEAD yet in a repo with no commits
   ]);
   return crypto.createHash("sha1").update(status).update(patch).digest("hex");
 }
@@ -70,7 +70,14 @@ async function decide(input, opts = {}) {
     return { ...allow(), why: "not-a-repo" };
   }
 
-  const files = await G.changedFiles(root, { type: "worktree" });
+  // A git failure must not read as "nothing to review" — that is the one way
+  // this gate can be wrong and stay silent about it.
+  let files;
+  try {
+    files = await G.changedFiles(root, { type: "worktree" });
+  } catch (e) {
+    return { ...allow(), why: `git-error(${(e && e.message) || e})`, root };
+  }
   if (!files.length) return { ...allow(), why: "clean-tree", root };
   if (files.length < cfg.minFiles)
     return { ...allow(), why: `below-threshold(${files.length}<${cfg.minFiles})`, root };

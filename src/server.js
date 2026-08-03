@@ -4,10 +4,14 @@ const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
 const G = require("./git");
+const Scope = require("./scope");
 const { render } = require("./feedback");
 const D = require("./drafts");
 
 const WEB = path.join(__dirname, "..", "web");
+// The scope vocabulary is shared with the browser, so it is served out of src
+// rather than duplicated into web/.
+const SHARED = { "/scope.js": path.join(__dirname, "scope.js") };
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -43,115 +47,134 @@ function readBody(req) {
   });
 }
 
-function parseScope(q) {
-  const type = q.get("scope") || "worktree";
-  if (type === "commit") return { type: "commit", sha: q.get("sha") };
-  if (type === "range") return { type: "range", base: q.get("base"), head: q.get("head") || "HEAD" };
-  return { type: "worktree" };
+function serveStatic(p, res) {
+  const file = SHARED[p] || path.join(WEB, p === "/" ? "index.html" : p.replace(/^\/+/, ""));
+  if ((!SHARED[p] && !file.startsWith(WEB)) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    res.writeHead(404).end("not found");
+    return;
+  }
+  const body = fs.readFileSync(file);
+  res.writeHead(200, {
+    "Content-Type": MIME[path.extname(file)] || "application/octet-stream",
+    "Content-Length": body.length,
+    "Cache-Control": "no-store",
+  });
+  res.end(body);
 }
 
 /**
- * @param {object} opts
- * @param {string} opts.root      repo root
- * @param {function} opts.finish  called with the final stdout payload; owns process exit
+ * One entry per endpoint, keyed by "METHOD /path". A handler takes the request
+ * context and returns the JSON body; throwing becomes a 500. This replaced an
+ * eight-branch if-chain where each arm re-parsed the scope and hand-rolled its
+ * own method check — adding an endpoint is now one entry, and the whole surface
+ * is readable at a glance.
+ *
+ * Context: `root`, `title`, `q` (query params), `scope` (parsed lazily, because
+ * most endpoints have no scope to validate), `body()`, `submit(result)`.
  */
-function createServer({ root, finish, title }) {
+const ROUTES = {
+  "GET /api/overview": async ({ root, title }) => ({
+    ...(await G.overview(root)),
+    title,
+    draft: D.loadDraft(root),
+  }),
+
+  "POST /api/draft": async ({ root, body }) => {
+    D.saveDraft(root, await body());
+    return { ok: true };
+  },
+
+  "GET /api/commits": async ({ root, q }) => ({
+    commits: await G.log(root, {
+      limit: +(q.get("limit") || 300),
+      skip: +(q.get("skip") || 0),
+      rev: q.get("rev") || null,
+      file: q.get("file") || null,
+      all: q.get("all") === "1",
+    }),
+  }),
+
+  "GET /api/commit": async ({ root, q }) => {
+    const sha = q.get("sha");
+    const [meta, files] = await Promise.all([
+      G.commitMeta(root, sha),
+      G.changedFiles(root, { type: "commit", sha }),
+    ]);
+    return { meta, files };
+  },
+
+  "GET /api/files": async ({ root, scope }) => ({ files: await G.changedFiles(root, scope) }),
+
+  "GET /api/diff": async ({ root, scope, q }) => {
+    const file = q.get("file");
+    const [diff, full] = await Promise.all([
+      G.fileDiff(root, scope, file),
+      q.get("full") === "1" ? G.fileContent(root, scope, file) : Promise.resolve(null),
+    ]);
+    return { file, diff, full };
+  },
+
+  "GET /api/file": async ({ root, scope, q }) => ({
+    file: q.get("file"),
+    full: await G.fileContent(root, scope, q.get("file")),
+  }),
+
+  "GET /api/tree": async ({ root, scope }) => ({ paths: await G.tree(root, scope) }),
+
+  "POST /api/submit": async ({ root, body, submit }) => {
+    const payload = await body();
+    submit({
+      decision: payload.decision || "annotated",
+      output: render({ ...payload, repo: path.basename(root) }),
+    });
+    D.clearDraft(root);
+    return { ok: true };
+  },
+};
+
+/**
+ * @param {object} opts
+ * @param {string} opts.root   repo root
+ * @param {string} [opts.title] header title for the session
+ * @returns {http.Server} with an extra `submitted` promise that resolves to
+ *   `{decision, output}` when the reviewer submits. The caller owns teardown
+ *   and process exit — this module knows nothing about either.
+ */
+function createServer({ root, title }) {
+  let onSubmit;
+  const submitted = new Promise((resolve) => (onSubmit = resolve));
+
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
     const p = url.pathname;
     const q = url.searchParams;
-
     try {
-      // ---- static -------------------------------------------------------
-      if (req.method === "GET" && !p.startsWith("/api/")) {
-        const rel = p === "/" ? "index.html" : p.replace(/^\/+/, "");
-        const file = path.join(WEB, rel);
-        if (!file.startsWith(WEB) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
-          res.writeHead(404).end("not found");
-          return;
-        }
-        const body = fs.readFileSync(file);
-        res.writeHead(200, {
-          "Content-Type": MIME[path.extname(file)] || "application/octet-stream",
-          "Content-Length": body.length,
-          "Cache-Control": "no-store",
-        });
-        res.end(body);
-        return;
+      const route = ROUTES[`${req.method} ${p}`];
+      if (route) {
+        return json(
+          res,
+          200,
+          await route({
+            root,
+            title,
+            q,
+            body: () => readBody(req),
+            submit: onSubmit,
+            get scope() {
+              return Scope.parse(q.get("scope"));
+            },
+          })
+        );
       }
-
-      // ---- api ----------------------------------------------------------
-      if (p === "/api/overview") {
-        const ov = await G.overview(root);
-        return json(res, 200, { ...ov, title, draft: D.loadDraft(root) });
-      }
-
-      if (p === "/api/draft" && req.method === "POST") {
-        D.saveDraft(root, await readBody(req));
-        return json(res, 200, { ok: true });
-      }
-
-      if (p === "/api/commits") {
-        const commits = await G.log(root, {
-          limit: +(q.get("limit") || 300),
-          skip: +(q.get("skip") || 0),
-          rev: q.get("rev") || null,
-          file: q.get("file") || null,
-          all: q.get("all") === "1",
-        });
-        return json(res, 200, { commits });
-      }
-
-      if (p === "/api/commit") {
-        const sha = q.get("sha");
-        const [meta, files] = await Promise.all([
-          G.commitMeta(root, sha),
-          G.changedFiles(root, { type: "commit", sha }),
-        ]);
-        return json(res, 200, { meta, files });
-      }
-
-      if (p === "/api/files") {
-        const scope = parseScope(q);
-        return json(res, 200, { files: await G.changedFiles(root, scope) });
-      }
-
-      if (p === "/api/diff") {
-        const scope = parseScope(q);
-        const file = q.get("file");
-        const [diff, full] = await Promise.all([
-          G.fileDiff(root, scope, file),
-          q.get("full") === "1" ? G.fileContent(root, scope, file) : Promise.resolve(null),
-        ]);
-        return json(res, 200, { file, diff, full });
-      }
-
-      if (p === "/api/file") {
-        const scope = parseScope(q);
-        return json(res, 200, { file: q.get("file"), full: await G.fileContent(root, scope, q.get("file")) });
-      }
-
-      if (p === "/api/tree") {
-        return json(res, 200, { paths: await G.tree(root, parseScope(q)) });
-      }
-
-      if (p === "/api/submit" && req.method === "POST") {
-        const payload = await readBody(req);
-        const out = render({ ...payload, repo: path.basename(root) });
-        D.clearDraft(root);
-        json(res, 200, { ok: true });
-        // Let the browser paint its confirmation screen before we tear down.
-        setTimeout(() => finish(out, payload.decision || "annotated"), 400);
-        return;
-      }
-
+      if (req.method === "GET" && !p.startsWith("/api/")) return serveStatic(p, res);
       res.writeHead(404).end("not found");
     } catch (e) {
       json(res, 500, { error: String((e && e.message) || e) });
     }
   });
 
+  server.submitted = submitted;
   return server;
 }
 
-module.exports = { createServer };
+module.exports = { createServer, ROUTES };

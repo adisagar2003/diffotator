@@ -28,13 +28,13 @@
 
 <div id="main">
   <aside id="sidebar">
-    <div class="side-scroll" id="sideScroll"></div>
+    <div class="side-scroll" id="sideScroll" tabindex="0"></div>
   </aside>
   <div class="vsplit" data-target="sidebar"></div>
 
   <section id="content">
     <div id="commitPane">
-      <div id="commitList" class="vlist"><div class="vspacer"></div><div class="vrows"></div></div>
+      <div id="commitList" class="vlist" tabindex="0"><div class="vspacer"></div><div class="vrows"></div></div>
     </div>
     <div class="hsplit" data-target="commitPane"></div>
 
@@ -67,7 +67,7 @@
               <button id="segTree" class="seg-btn" title="Directory tree">Tree</button>
             </div>
           </div>
-          <div id="fileTree" class="tree"></div>
+          <div id="fileTree" class="tree" tabindex="0"></div>
         </div>
         <div class="vsplit" data-target="leftPane"></div>
         <div id="rightPane">
@@ -79,7 +79,7 @@
             <button id="searchNext" title="Next (⏎)">▼</button>
             <button id="searchClose" title="Close (Esc)">✕</button>
           </div>
-          <div id="diffBody" class="vlist code"><div class="vspacer"></div><div class="vrows"></div></div>
+          <div id="diffBody" class="vlist code" tabindex="0"><div class="vspacer"></div><div class="vrows"></div></div>
           <div id="hscroll" class="off"><div id="hscrollInner"></div></div>
           <div id="commitDetail" class="detail" hidden></div>
         </div>
@@ -89,7 +89,7 @@
 
   <aside id="commentsPanel" hidden>
     <div class="cp-head">Comments <span id="cpCount" class="count">0</span></div>
-    <div id="cpList" class="cp-list"></div>
+    <div id="cpList" class="cp-list" tabindex="0"></div>
   </aside>
 </div>
 
@@ -138,6 +138,7 @@
   <div class="modal-card small">
     <h2>Shortcuts</h2>
     <table class="keys">
+      <tr><td><kbd>⌃h</kbd> <kbd>⌃j</kbd> <kbd>⌃k</kbd> <kbd>⌃l</kbd></td><td>move between panes (⌃ + arrows too)</td></tr>
       <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous file</td></tr>
       <tr><td><kbd>n</kbd> / <kbd>p</kbd></td><td>next / previous change</td></tr>
       <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>move the line cursor</td></tr>
@@ -155,6 +156,8 @@
   </div>
 </div>
 
+<script src="/scope.js"></script>
+<script src="/review-model.js"></script>
 <script src="/highlight.js"></script>
 <script src="/app.js"></script>
 </body>
