@@ -10,10 +10,13 @@
 
 const $ = (s) => document.querySelector(s);
 
+// The fold/split/threading/graph arithmetic lives in review-model.js so it can
+// be tested without a browser; this file is the DOM half.
+const RM = window.RM;
+
 const LABELS = ["suggestion", "nit", "question", "issue", "praise", "thought", "note", "todo", "chore"];
 const LANE_COLORS = ["#e5484d", "#f5a524", "#46a758", "#3e9dd6", "#a97bd6", "#e07ba8", "#5eead4", "#f0c674"];
-const CONTEXT = 3;
-const ROW = 20;
+const ROW = RM.GEOM.row;
 const CROW = 26;
 
 const S = {
@@ -63,16 +66,11 @@ async function api(path, params = {}, { cached = false } = {}) {
   if (cached) cache.set(url, p);
   return p;
 }
-function scopeId() {
-  const x = S.scope;
-  return x.type === "commit" ? "commit:" + x.sha : x.type === "range" ? "range:" + x.base : "worktree";
-}
-function scopeParams() {
-  const s = S.scope;
-  if (s.type === "commit") return { scope: "commit", sha: s.sha };
-  if (s.type === "range") return { scope: "range", base: s.base, head: s.head };
-  return { scope: "worktree" };
-}
+/* One canonical string names a scope on the wire, in the request cache and in
+   per-scope viewed state. Encoding and labelling live in src/scope.js, served
+   to this page, so the browser and the git layer cannot drift apart. */
+const scopeId = () => Scope.encode(S.scope);
+const scopeParams = () => ({ scope: scopeId() });
 
 // ---------------------------------------------------------------------------
 // virtual list
@@ -319,45 +317,9 @@ $("#sideScroll").addEventListener("click", async (e) => {
 // commit list + graph
 // ---------------------------------------------------------------------------
 function computeGraph(commits) {
-  const lanes = [];
-  const res = [];
-  let maxLanes = 1;
-  const free = (arr) => {
-    const i = arr.indexOf(null);
-    return i < 0 ? arr.length : i;
-  };
-  for (const c of commits) {
-    const incoming = lanes.slice();
-    let lane = incoming.indexOf(c.sha);
-    if (lane < 0) {
-      lane = free(lanes);
-      if (lane === lanes.length) lanes.push(null);
-    }
-    lanes[lane] = c.parents[0] || null;
-    const merges = [];
-    for (let i = 0; i < lanes.length; i++) {
-      if (i !== lane && incoming[i] === c.sha) {
-        merges.push(i);
-        lanes[i] = null;
-      }
-    }
-    const branches = [];
-    for (const p of c.parents.slice(1)) {
-      let l = lanes.indexOf(p);
-      if (l < 0) {
-        l = free(lanes);
-        if (l === lanes.length) lanes.push(null);
-        lanes[l] = p;
-      }
-      branches.push(l);
-    }
-    while (lanes.length && lanes[lanes.length - 1] === null) lanes.pop();
-    const outgoing = lanes.slice();
-    maxLanes = Math.max(maxLanes, incoming.length, outgoing.length, lane + 1);
-    res.push({ lane, incoming, outgoing, merges, branches });
-  }
-  S.maxLanes = Math.min(maxLanes, 12);
-  return res;
+  const { graph, maxLanes } = RM.computeGraph(commits);
+  S.maxLanes = maxLanes;
+  return graph;
 }
 
 function graphSvg(g) {
@@ -493,26 +455,21 @@ async function setScope(scope, name, keepCommits) {
   S.diff = null;
   S.fullRows = null;
   S.treePaths = null;
-  $("#scopeChip").textContent =
-    scope.type === "worktree"
-      ? "working tree vs HEAD"
-      : scope.type === "range"
-      ? `${scope.base}...HEAD`
-      : `commit ${String(scope.sha).slice(0, 8)}`;
+  $("#scopeChip").textContent = Scope.label(scope);
   if (!keepCommits) collapseCommits(scope.type !== "commit");
   sidebar();
   const { files } = await api("files", scopeParams(), { cached: true });
   if (seq !== scopeSeq) return;
   S.files = files;
-  renderFileTree();
-  renderProgress();
-  sidebar();
+  render();
+  // The File Tree pane is scope-specific and was just invalidated; without this
+  // it stays empty until the reader happens to toggle tabs.
+  if (S.tab === "tree") {
+    await loadTree();
+    if (seq !== scopeSeq) return; // a newer scope won while the tree was in flight
+  }
   const first = files[0];
   if (first) selectFile(first.path);
-  else {
-    S.diff = null;
-    renderDiff();
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -607,10 +564,7 @@ const isViewed = (path) => S.viewed.has(viewKey(path));
 function setViewed(path, on) {
   const k = viewKey(path);
   on ? S.viewed.add(k) : S.viewed.delete(k);
-  saveDraft();
-  renderProgress();
-  renderFileTree();
-  syncViewedToggle();
+  changed();
 }
 
 function renderProgress() {
@@ -636,16 +590,12 @@ function syncViewedToggle() {
 }
 
 /** Next file that has not been marked viewed, wrapping from the current one. */
-function nextUnviewed() {
-  const list = S.files.map((f) => f.path);
-  if (!list.length) return null;
-  const start = Math.max(0, list.indexOf(S.selFile));
-  for (let i = 1; i <= list.length; i++) {
-    const p = list[(start + i) % list.length];
-    if (!isViewed(p)) return p;
-  }
-  return null;
-}
+const nextUnviewed = () =>
+  RM.nextUnviewed(
+    S.files.map((f) => f.path),
+    S.selFile,
+    isViewed
+  );
 
 function fileRow(path, m, depth, label) {
   const sel = S.selFile === path ? " sel" : "";
@@ -749,126 +699,24 @@ async function selectFile(path) {
   if (nx) api("diff", { ...scopeParams(), file: nx.path, full: "1" }, { cached: true });
 }
 
-/** Pair a unified row stream into left/right columns for split view. */
-function toSplit(rows) {
-  const out = [];
-  let i = 0;
-  while (i < rows.length) {
-    const r = rows[i];
-    if (r.t === "ctx" || r.t === "gap") {
-      out.push({ t: r.t, l: r, r: r });
-      i++;
-      continue;
-    }
-    const dels = [];
-    const adds = [];
-    while (i < rows.length && rows[i].t === "del") dels.push(rows[i++]);
-    while (i < rows.length && rows[i].t === "add") adds.push(rows[i++]);
-    if (!dels.length && !adds.length) {
-      i++;
-      continue;
-    }
-    const n = Math.max(dels.length, adds.length);
-    for (let k = 0; k < n; k++) out.push({ t: "chg", l: dels[k] || null, r: adds[k] || null });
-  }
-  return out;
-}
+const annKey = RM.annKey;
+const annIndex = () => RM.annIndex(S.ann);
 
-function annKey(file, side, line) {
-  return `${file}|${side}|${line}`;
-}
-function annIndex() {
-  const m = new Map();
-  for (const a of S.ann) {
-    const k = annKey(a.file, a.side, a.line);
-    m.set(k, (m.get(k) || 0) + 1);
-  }
-  return m;
-}
-
+/** Hand the current state to the review model and keep what it returns. */
 function buildItems() {
-  // The diff is fetched with full context already, so "Full file" only has to
-  // stop folding — swapping in plain content would throw away the add/del marks.
-  const haveDiff = !!(S.diff && S.diff.rows && S.diff.rows.length);
-  const src = haveDiff ? S.diff.rows : S.fullRows || [];
-  const noFold = S.full || !haveDiff;
-  // Split only earns its keep when both columns differ. A pure add, a pure
-  // delete, or an unchanged file browsed from the File Tree would otherwise
-  // burn half the pane on hatching or on a duplicate of itself.
-  const hasAdd = src.some((r) => r.t === "add");
-  const hasDel = src.some((r) => r.t === "del");
-  S.singleGutter = !hasAdd && !hasDel;
-  S.effView = S.view === "split" && hasAdd && hasDel ? "split" : "unified";
-  const units = S.effView === "split" ? toSplit(src) : src.map((r) => ({ t: r.t, l: r, r: r, uni: r }));
-  const idx = annIndex();
-
-  const interesting = new Array(units.length).fill(false);
-  if (!noFold) {
-    for (let i = 0; i < units.length; i++) {
-      const u = units[i];
-      const t = u.t;
-      if (t !== "ctx" && t !== "gap") interesting[i] = true;
-      const ln = u.r && u.r.n;
-      if (ln && idx.has(annKey(S.selFile, "new", ln))) interesting[i] = true;
-      const lo = u.l && u.l.o;
-      if (lo && idx.has(annKey(S.selFile, "old", lo))) interesting[i] = true;
-    }
-  }
-
-  const keep = new Array(units.length).fill(noFold);
-  if (!noFold) {
-    for (let i = 0; i < units.length; i++) {
-      if (!interesting[i]) continue;
-      for (let k = Math.max(0, i - CONTEXT); k <= Math.min(units.length - 1, i + CONTEXT); k++) keep[k] = true;
-    }
-  }
-
-  const items = [];
-  const byLine = new Map();
-  for (const a of S.ann) {
-    if (a.file !== S.selFile) continue;
-    const k = a.side + ":" + a.line;
-    if (!byLine.has(k)) byLine.set(k, []);
-    byLine.get(k).push(a);
-  }
-  const pushRow = (u, i) => {
-    items.push({ k: "row", u, i });
-    if (!byLine.size) return;
-    // A comment belongs under the line it is about, so it reads like a thread.
-    const seen = new Set();
-    for (const [side, row] of [["old", u.l], ["new", u.r]]) {
-      const n = row && (side === "old" ? row.o : row.n);
-      if (n == null) continue;
-      for (const a of byLine.get(side + ":" + n) || []) {
-        if (seen.has(a.id)) continue;
-        seen.add(a.id);
-        items.push({ k: "comment", a });
-      }
-    }
-  };
-
-  let i = 0;
-  while (i < units.length) {
-    if (keep[i]) {
-      pushRow(units[i], i);
-      i++;
-      continue;
-    }
-    const start = i;
-    while (i < units.length && !keep[i]) i++;
-    const id = "f" + start;
-    if (S.expanded.has(id)) {
-      for (let j = start; j < i; j++) pushRow(units[j], j);
-    } else {
-      items.push({ k: "fold", id, count: i - start, from: start, to: i });
-    }
-  }
-  S.items = items;
-
-  // Widest line decides how far the shared pan scrollbar can travel.
-  let maxLen = 0;
-  for (const r of src) if (r.s && r.s.length > maxLen) maxLen = Math.min(r.s.length, 4000);
-  sizePan(maxLen * S.charW + 24);
+  const out = RM.buildItems({
+    rows: S.diff && S.diff.rows,
+    fullRows: S.fullRows,
+    annotations: S.ann,
+    file: S.selFile,
+    expanded: S.expanded,
+    full: S.full,
+    view: S.view,
+  });
+  S.items = out.items;
+  S.effView = out.effView;
+  S.singleGutter = out.singleGutter;
+  sizePan(out.maxLineLen * S.charW + 24);
 }
 
 /** One scrollbar pans every `.txt` in lockstep — see `.side{overflow:hidden}`. */
@@ -899,11 +747,24 @@ $("#diffBody").addEventListener(
   { passive: true }
 );
 
-function renderRowHtml(item, top, index) {
-  if (item.k === "comment") {
+/* Card height is derived, never measured: wrapping is estimated from the pane
+   width and the body is line-clamped to that estimate, so the prefix-sum index
+   stays exact and nothing jumps while scrolling. The estimate itself lives in
+   the review model — this is only the measurement it needs. */
+const charsPerComment = () => ($("#diffBody").clientWidth - 150) / (S.uiCharW || 6.2);
+const commentLines = (a) => RM.commentLines(a, charsPerComment());
+const itemHeight = (i) => RM.itemHeight(S.items[i], charsPerComment());
+
+/**
+ * One entry per row kind. The pane started as code rows, then grew fold markers
+ * and comment cards, and the if-chain had to be read top to bottom to find out
+ * which kinds existed — a table names them, and a fourth kind is one entry.
+ */
+const ROW_HTML = {
+  comment(item, top) {
     const a = item.a;
-    const h = CARD_HEAD + CARD_PAD + commentLines(a) * CARD_LINE;
-    return `<div class="cmtcard" style="top:${top}px;height:${h}px" data-cid="${a.id}">
+    const lines = commentLines(a);
+    return `<div class="cmtcard" style="top:${top}px;height:${RM.itemHeight(item, charsPerComment())}px" data-cid="${a.id}">
       <div class="cc-head">
         <span class="lbl-pill${a.blocking ? " blocking" : ""}">${esc(a.label)}${a.blocking ? " · blocking" : ""}</span>
         <span class="cc-loc">${a.side === "old" ? "old " : ""}L${a.line}</span>
@@ -911,89 +772,76 @@ function renderRowHtml(item, top, index) {
         <button class="cc-act" data-edit="${a.id}">edit</button>
         <button class="cc-act" data-del="${a.id}">delete</button>
       </div>
-      <div class="cc-body" style="-webkit-line-clamp:${commentLines(a)}">${esc(a.body)}${
+      <div class="cc-body" style="-webkit-line-clamp:${lines}">${esc(a.body)}${
         a.suggestion ? `<span class="cc-sug">↳ suggested: ${esc(a.suggestion.split("\n")[0])}</span>` : ""
       }</div>
     </div>`;
-  }
-  if (item.k === "fold") {
+  },
+
+  fold(item, top) {
     return `<div class="fold" style="top:${top}px" data-fold="${item.id}">
       <span>⌄</span> ${item.count} unmodified line${item.count === 1 ? "" : "s"} — click to expand</div>`;
-  }
-  const u = item.u;
-  const lang = extOf(S.selFile);
-  const hit = S.search.hitSet && S.search.hitSet.has(index)
-    ? S.search.hits[S.search.idx] === index ? " hit cur" : " hit"
-    : "";
-  const idx = S.annIdx;
-  const foc = S.focus;
+  },
 
-  const gutHtml = (side, num, cls) => {
-    if (num == null) return `<div class="gut"></div>`;
-    const n = idx.get(annKey(S.selFile, side, num));
-    return `<div class="gut ${cls}${n ? " hasc" : ""}" data-side="${side}" data-line="${num}">
-      <span class="plus">+</span>${num}${n ? `<span class="cmtbadge">${n}</span>` : ""}</div>`;
-  };
+  row(item, top, index) {
+    const u = item.u;
+    const lang = extOf(S.selFile);
+    const hit = S.search.hitSet && S.search.hitSet.has(index)
+      ? S.search.hits[S.search.idx] === index ? " hit cur" : " hit"
+      : "";
+    const idx = S.annIdx;
+    const foc = S.focus;
 
-  if (S.effView === "unified") {
-    const r = u.uni;
-    if (r.t === "gap") return `<div class="fold" style="top:${top}px">⋯</div>`;
-    const cls = r.t === "add" ? "add" : r.t === "del" ? "del" : "";
-    const focused = foc && foc.line === (r.n ?? r.o) && foc.file === S.selFile ? " focus" : "";
-    const gutters = S.singleGutter
-      ? gutHtml("new", r.n ?? r.o ?? null, cls)
-      : gutHtml("old", r.o ?? null, cls) + gutHtml("new", r.n ?? null, cls);
-    return `<div class="drow${focused}${hit}" style="top:${top}px">
-      <div class="side only">
-        ${gutters}
-        <div class="txt ${cls}"><span class="pan">${HL.highlight(r.s, lang)}</span></div>
-      </div></div>`;
-  }
+    const gutHtml = (side, num, cls) => {
+      if (num == null) return `<div class="gut"></div>`;
+      const n = idx.get(annKey(S.selFile, side, num));
+      return `<div class="gut ${cls}${n ? " hasc" : ""}" data-side="${side}" data-line="${num}">
+        <span class="plus">+</span>${num}${n ? `<span class="cmtbadge">${n}</span>` : ""}</div>`;
+    };
 
-  if (u.t === "gap") return `<div class="fold" style="top:${top}px">⋯</div>`;
-  const L = u.l;
-  const R = u.r;
-  let lh, rh;
-  if (u.t === "chg" && L && R) [lh, rh] = HL.renderPair(L.s, R.s, lang);
-  else {
-    lh = L ? HL.highlight(L.s, lang) : null;
-    rh = R ? HL.highlight(R.s, lang) : null;
-  }
-  const lcls = u.t === "chg" ? "del" : "";
-  const rcls = u.t === "chg" ? "add" : "";
-  const focL = foc && foc.side === "old" && L && foc.line === L.o ? " focus" : "";
-  const focR = foc && foc.side === "new" && R && foc.line === R.n ? " focus" : "";
-  return `<div class="drow${focL || focR}${hit}" style="top:${top}px">
-    <div class="side">
-      ${gutHtml("old", L ? L.o ?? null : null, lcls)}
-      <div class="txt ${L ? lcls : "empty"}"><span class="pan">${lh ?? ""}</span></div>
-    </div>
-    <div class="side">
-      ${gutHtml("new", R ? R.n ?? null : null, rcls)}
-      <div class="txt ${R ? rcls : "empty"}"><span class="pan">${rh ?? ""}</span></div>
-    </div>
-  </div>`;
-}
+    if (S.effView === "unified") {
+      const r = u.uni;
+      if (r.t === "gap") return `<div class="fold" style="top:${top}px">⋯</div>`;
+      const cls = r.t === "add" ? "add" : r.t === "del" ? "del" : "";
+      const focused = foc && foc.line === (r.n ?? r.o) && foc.file === S.selFile ? " focus" : "";
+      const gutters = S.singleGutter
+        ? gutHtml("new", r.n ?? r.o ?? null, cls)
+        : gutHtml("old", r.o ?? null, cls) + gutHtml("new", r.n ?? null, cls);
+      return `<div class="drow${focused}${hit}" style="top:${top}px">
+        <div class="side only">
+          ${gutters}
+          <div class="txt ${cls}"><span class="pan">${HL.highlight(r.s, lang)}</span></div>
+        </div></div>`;
+    }
 
-/* Card height is derived, never measured: wrapping is estimated from the pane
-   width and the body is line-clamped to that estimate, so the prefix-sum index
-   stays exact and nothing jumps while scrolling. */
-const CARD_HEAD = 26;
-const CARD_LINE = 17;
-const CARD_PAD = 14;
-const CARD_MAX_LINES = 4;
-function commentLines(a) {
-  const cpl = Math.max(28, Math.floor(($("#diffBody").clientWidth - 150) / (S.uiCharW || 6.2)));
-  let n = 0;
-  for (const seg of String(a.body || "").split("\n")) n += Math.max(1, Math.ceil(seg.length / cpl));
-  if (a.suggestion) n += 1;
-  return Math.min(CARD_MAX_LINES, Math.max(1, n));
-}
-function itemHeight(i) {
-  const it = S.items[i];
-  if (!it) return ROW;
-  return it.k === "comment" ? CARD_HEAD + CARD_PAD + commentLines(it.a) * CARD_LINE : ROW;
-}
+    if (u.t === "gap") return `<div class="fold" style="top:${top}px">⋯</div>`;
+    const L = u.l;
+    const R = u.r;
+    let lh, rh;
+    if (u.t === "chg" && L && R) [lh, rh] = HL.renderPair(L.s, R.s, lang);
+    else {
+      lh = L ? HL.highlight(L.s, lang) : null;
+      rh = R ? HL.highlight(R.s, lang) : null;
+    }
+    const lcls = u.t === "chg" ? "del" : "";
+    const rcls = u.t === "chg" ? "add" : "";
+    const focL = foc && foc.side === "old" && L && foc.line === L.o ? " focus" : "";
+    const focR = foc && foc.side === "new" && R && foc.line === R.n ? " focus" : "";
+    return `<div class="drow${focL || focR}${hit}" style="top:${top}px">
+      <div class="side">
+        ${gutHtml("old", L ? L.o ?? null : null, lcls)}
+        <div class="txt ${L ? lcls : "empty"}"><span class="pan">${lh ?? ""}</span></div>
+      </div>
+      <div class="side">
+        ${gutHtml("new", R ? R.n ?? null : null, rcls)}
+        <div class="txt ${R ? rcls : "empty"}"><span class="pan">${rh ?? ""}</span></div>
+      </div>
+    </div>`;
+  },
+};
+
+const renderRowHtml = (item, top, index) =>
+  item && ROW_HTML[item.k] ? ROW_HTML[item.k](item, top, index) : "";
 
 const diffVL = vlist(
   $("#diffBody"),
@@ -1062,9 +910,8 @@ function renderDiff() {
 
   buildItems();
   if (S.search.q) {
-    const q = S.search.q;
     S.search.hitSet = null;
-    runSearch(q);
+    runSearch(S.search.q, false);
     return;
   }
   diffVL.refresh();
@@ -1081,7 +928,7 @@ $("#diffBody").addEventListener("click", (e) => {
   const del = e.target.closest("[data-del]");
   if (del) {
     S.ann = S.ann.filter((a) => a.id !== del.dataset.del);
-    afterAnnChange();
+    changed();
     return;
   }
   const edit = e.target.closest("[data-edit]");
@@ -1100,44 +947,24 @@ $("#diffHeader").addEventListener("click", (e) => {
 });
 
 function jumpChange(dir) {
-  const box = $("#diffBody");
-  const cur = Math.floor(box.scrollTop / ROW);
-  const isChange = (it) => it.k === "row" && it.u.t !== "ctx" && it.u.t !== "gap";
-  if (dir > 0) {
-    // skip past the current contiguous change block first
-    let i = cur;
-    while (i < S.items.length && isChange(S.items[i])) i++;
-    while (i < S.items.length && !isChange(S.items[i])) i++;
-    if (i < S.items.length) diffVL.scrollToIndex(i, true);
-  } else {
-    let i = Math.max(0, cur - 1);
-    while (i >= 0 && isChange(S.items[i])) i--;
-    while (i >= 0 && !isChange(S.items[i])) i--;
-    while (i > 0 && isChange(S.items[i - 1])) i--;
-    if (i >= 0) diffVL.scrollToIndex(i, true);
-  }
+  const cur = Math.floor($("#diffBody").scrollTop / ROW);
+  const i = RM.findChange(S.items, cur, dir);
+  if (i >= 0) diffVL.scrollToIndex(i, true);
 }
 
 /* Windowing means only ~60 rows exist in the DOM, so the browser's own Find
    cannot see the file. Search has to be ours. */
-function runSearch(q) {
+function runSearch(q, jump = true) {
   S.search.q = q;
-  const needle = q.toLowerCase();
-  const hits = [];
-  if (needle) {
-    for (let i = 0; i < S.items.length; i++) {
-      const it = S.items[i];
-      if (it.k !== "row") continue;
-      const a = it.u.l && it.u.l.s;
-      const b = it.u.r && it.u.r.s;
-      if ((a && a.toLowerCase().includes(needle)) || (b && b.toLowerCase().includes(needle))) hits.push(i);
-    }
-  }
+  const hits = RM.searchHits(S.items, q);
+  const at = jump ? 0 : S.search.idx;
   S.search.hits = hits;
   S.search.hitSet = new Set(hits);
-  S.search.idx = 0;
-  $("#searchCount").textContent = hits.length ? `1/${hits.length}` : q ? "no matches" : "";
-  if (hits.length) diffVL.scrollToIndex(hits[0], true);
+  // A repaint re-runs the search but must not move the reader: only a new query
+  // or an explicit next/prev jumps.
+  S.search.idx = Math.min(at, Math.max(0, hits.length - 1));
+  $("#searchCount").textContent = hits.length ? `${S.search.idx + 1}/${hits.length}` : q ? "no matches" : "";
+  if (jump && hits.length) diffVL.scrollToIndex(hits[0], true);
   diffVL.refresh();
 }
 function stepSearch(d) {
@@ -1173,26 +1000,10 @@ $("#searchClose").onclick = closeSearch;
 
 /* A line cursor so a review can be driven without ever reaching for the mouse. */
 function moveFocus(dir) {
-  const rows = [];
-  for (let i = 0; i < S.items.length; i++) if (S.items[i].k === "row") rows.push(i);
-  if (!rows.length) return;
-  const lineOf = (it) => (it.u.r && it.u.r.n != null ? { side: "new", line: it.u.r.n } : it.u.l && it.u.l.o != null ? { side: "old", line: it.u.l.o } : null);
-  let at = -1;
-  if (S.focus) {
-    at = rows.findIndex((i) => {
-      const l = lineOf(S.items[i]);
-      return l && l.side === S.focus.side && l.line === S.focus.line;
-    });
-  }
-  let next = at < 0 ? rows[0] : rows[Math.min(rows.length - 1, Math.max(0, rows.indexOf(rows[at]) + dir))];
-  if (at >= 0) {
-    const pos = rows.indexOf(rows[at]);
-    next = rows[Math.min(rows.length - 1, Math.max(0, pos + dir))];
-  }
-  const l = lineOf(S.items[next]);
-  if (!l) return;
-  S.focus = { file: S.selFile, side: l.side, line: l.line };
-  diffVL.scrollToIndex(next, false);
+  const next = RM.focusStep(S.items, S.focus, dir);
+  if (!next) return;
+  S.focus = { file: S.selFile, side: next.side, line: next.line };
+  diffVL.scrollToIndex(next.index, false);
   diffVL.refresh();
 }
 
@@ -1208,12 +1019,7 @@ function commentOnFocus() {
     );
   let g = find();
   if (!g) {
-    const i = S.items.findIndex(
-      (it) =>
-        it.k === "row" &&
-        ((S.focus.side === "new" && it.u.r && it.u.r.n === S.focus.line) ||
-          (S.focus.side === "old" && it.u.l && it.u.l.o === S.focus.line))
-    );
+    const i = RM.rowIndexFor(S.items, S.focus.side, S.focus.line);
     if (i >= 0) diffVL.scrollToIndex(i, true);
     g = find();
   }
@@ -1231,14 +1037,22 @@ function setTab(tab) {
   $("#commitDetail").hidden = tab !== "commit";
   $("#diffTools").style.visibility = tab === "commit" ? "hidden" : "visible";
   $("#chkViewed").parentElement.hidden = tab === "tree";
-  if (tab === "tree" && !S.treePaths) {
-    api("tree", scopeParams(), { cached: true }).then(({ paths }) => {
-      S.treePaths = paths;
-      renderFileTree();
-    });
-  } else {
-    renderFileTree();
-  }
+  if (tab === "tree" && !S.treePaths) loadTree();
+  else renderFileTree();
+}
+
+/**
+ * The whole repo at the current scope. Changing scope invalidates it, and the
+ * guard lives here rather than at the two callers: `setTab` fires this without
+ * awaiting it, so a scope change mid-flight would otherwise land one revision's
+ * paths next to another revision's contents.
+ */
+async function loadTree() {
+  const seq = scopeSeq;
+  const { paths } = await api("tree", scopeParams(), { cached: true });
+  if (seq !== scopeSeq) return;
+  S.treePaths = paths;
+  renderFileTree();
 }
 document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => setTab(t.dataset.tab)));
 
@@ -1348,7 +1162,7 @@ $("#popAddSug").onclick = () => {
 $("#popDelete").onclick = () => {
   if (!S.popFor || !S.popFor.id) return;
   S.ann = S.ann.filter((a) => a.id !== S.popFor.id);
-  afterAnnChange();
+  changed();
   closePopover();
 };
 $("#popSave").onclick = savePopover;
@@ -1376,19 +1190,37 @@ function savePopover() {
   const i = S.ann.findIndex((a) => a.id === rec.id);
   if (i >= 0) S.ann[i] = rec;
   else S.ann.push(rec);
-  afterAnnChange();
+  changed();
   closePopover();
 }
 
-function afterAnnChange() {
-  saveDraft();
+function renderCounts() {
   const n = S.ann.length;
   $("#cmtCount").textContent = n;
   $("#cmtCount").classList.toggle("zero", n === 0);
   $("#cpCount").textContent = n;
-  renderComments();
+}
+
+/**
+ * Repaint every surface derived from `S`. Each mutation used to hand-pick its
+ * own combination of these — `setViewed` called four, annotation edits called
+ * five plus two inline count updates — so forgetting one left a stale comment
+ * badge or progress bar with nothing to point at. One list, one place to fix.
+ */
+function render() {
+  sidebar();
   renderFileTree();
+  renderProgress();
+  renderComments();
+  renderCounts();
+  syncViewedToggle();
   renderDiff();
+}
+
+/** Something the reviewer owns changed: persist it (debounced) and repaint. */
+function changed() {
+  saveDraft();
+  render();
 }
 
 function renderComments() {
@@ -1411,9 +1243,7 @@ $("#cpList").addEventListener("click", async (e) => {
     if (!S.files.some((f) => f.path === a.file)) setTab("tree");
     await selectFile(a.file);
   }
-  const target = S.items.findIndex(
-    (x) => x.k === "row" && ((a.side === "new" && x.u.r && x.u.r.n === a.line) || (a.side === "old" && x.u.l && x.u.l.o === a.line))
-  );
+  const target = RM.rowIndexFor(S.items, a.side, a.line);
   if (target >= 0) diffVL.scrollToIndex(target, true);
   S.focus = { file: a.file, side: a.side, line: a.line };
   renderDiff();
@@ -1531,6 +1361,47 @@ document.querySelectorAll(".vsplit,.hsplit").forEach((sp) => {
 });
 
 // ---------------------------------------------------------------------------
+// pane focus (ctrl + hjkl / arrows)
+// ---------------------------------------------------------------------------
+/* Focus lands on the scroller, not the pane wrapper, so the browser's own
+   arrow/page/space scrolling works once a pane is active; the ring is drawn on
+   the wrapper via :focus-within. */
+const PANE_SCROLLER = {
+  sidebar: "#sideScroll",
+  commitPane: "#commitList",
+  leftPane: "#fileTree",
+  rightPane: "#diffBody",
+  commentsPanel: "#cpList",
+};
+/* Keys double as directions: h=left, j=down, k=up, l=right. */
+const PANE_NEIGHBOR = {
+  sidebar: { l: "leftPane" },
+  commitPane: { h: "sidebar", l: "commentsPanel", j: "leftPane" },
+  leftPane: { h: "sidebar", l: "rightPane", k: "commitPane" },
+  rightPane: { h: "leftPane", l: "commentsPanel", k: "commitPane" },
+  commentsPanel: { h: "rightPane" },
+};
+const PANE_DIR = { h: "h", j: "j", k: "k", l: "l", ArrowLeft: "h", ArrowDown: "j", ArrowUp: "k", ArrowRight: "l" };
+
+/** Which pane holds focus. Body-level focus counts as the diff, which is where
+    the pre-existing line-cursor keys have always applied. */
+function curPane() {
+  return (
+    Object.keys(PANE_NEIGHBOR).find((id) => document.getElementById(id).contains(document.activeElement)) || "rightPane"
+  );
+}
+function movePane(dir) {
+  let at = curPane();
+  // A collapsed commit pane or a closed comments panel is walked through, not into.
+  for (let hops = 0; hops < Object.keys(PANE_NEIGHBOR).length; hops++) {
+    const nx = PANE_NEIGHBOR[at][dir];
+    if (!nx) return;
+    at = nx;
+    if (document.getElementById(at).offsetParent) return $(PANE_SCROLLER[at]).focus();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // keyboard
 // ---------------------------------------------------------------------------
 document.addEventListener("keydown", (e) => {
@@ -1555,7 +1426,16 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (typing) return;
+  // Not before the `typing` guard: ctrl+h/k are macOS text-editing bindings and
+  // comment textareas need them more than pane switching does.
+  if (e.ctrlKey && !e.metaKey && !e.altKey && PANE_DIR[e.key]) {
+    e.preventDefault();
+    movePane(PANE_DIR[e.key]);
+    return;
+  }
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    // Outside the diff, arrows belong to the focused pane's own scrolling.
+    if (curPane() !== "rightPane") return;
     e.preventDefault();
     moveFocus(e.key === "ArrowDown" ? 1 : -1);
     return;
@@ -1611,8 +1491,7 @@ document.addEventListener("keydown", (e) => {
   $("#repoName").textContent = S.ov.title || S.ov.name;
   $("#branchChip").textContent = "⑂ " + S.ov.branch;
   loadDraft();
-  afterAnnChange();
-  sidebar();
+  render();
   await loadCommits(false); // the initial scope below owns what gets shown
   await setScope({ type: "worktree" }, "Local Changes");
   if (!S.files.length && S.ov.base) {

@@ -2,6 +2,7 @@
 const { execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const Scope = require("./scope");
 
 const US = "\x1f"; // unit separator
 const RS = "\x1e"; // record separator
@@ -30,7 +31,14 @@ function git(cwd, args, opts = {}) {
   });
 }
 
-async function tryGit(cwd, args, fallback = "") {
+/**
+ * For questions where *absence is a legitimate answer* — does `origin/main`
+ * exist, is there an upstream, are there any stashes. Never for reading the
+ * review itself: a swallowed failure there returns an empty list, which the
+ * Stop hook cannot tell apart from a clean tree, so it would silently decide
+ * there is nothing to review. Those calls use `git` and are allowed to throw.
+ */
+async function probe(cwd, args, fallback = "") {
   try {
     return await git(cwd, args);
   } catch {
@@ -47,20 +55,20 @@ async function repoRoot(cwd) {
 async function detectBase(root, head) {
   const candidates = [];
   const upstream = (
-    await tryGit(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+    await probe(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
   ).trim();
   if (upstream) candidates.push(upstream);
   for (const n of ["origin/prerelease", "origin/main", "origin/master", "origin/develop", "main", "master"]) {
     candidates.push(n);
   }
-  const headSha = (await tryGit(root, ["rev-parse", "HEAD"])).trim();
+  const headSha = (await probe(root, ["rev-parse", "HEAD"])).trim();
   for (const ref of candidates) {
     // The branch's own remote counterpart is not a review base — it is the
     // same line of work, so its diff is just "what I have not pushed yet".
     if (ref === head || ref.endsWith("/" + head)) continue;
-    const ok = await tryGit(root, ["rev-parse", "--verify", "--quiet", ref + "^{commit}"]);
+    const ok = await probe(root, ["rev-parse", "--verify", "--quiet", ref + "^{commit}"]);
     if (!ok.trim()) continue;
-    const mb = (await tryGit(root, ["merge-base", ref, "HEAD"])).trim();
+    const mb = (await probe(root, ["merge-base", ref, "HEAD"])).trim();
     if (!mb || mb === headSha) continue; // nothing on this branch relative to ref
     return { ref, mergeBase: mb };
   }
@@ -69,9 +77,9 @@ async function detectBase(root, head) {
 
 async function overview(root) {
   const [nameRaw, branchRaw, headRaw] = await Promise.all([
-    tryGit(root, ["rev-parse", "--show-toplevel"]),
-    tryGit(root, ["rev-parse", "--abbrev-ref", "HEAD"]),
-    tryGit(root, ["rev-parse", "HEAD"]),
+    probe(root, ["rev-parse", "--show-toplevel"]),
+    probe(root, ["rev-parse", "--abbrev-ref", "HEAD"]),
+    probe(root, ["rev-parse", "HEAD"]), // absent in a repo with no commits yet
   ]);
   const branch = branchRaw.trim();
   const [worktrees, branches, remoteBranches, tags, stashes, base] = await Promise.all([
@@ -97,7 +105,7 @@ async function overview(root) {
 }
 
 async function listWorktrees(root) {
-  const out = await tryGit(root, ["worktree", "list", "--porcelain"]);
+  const out = await probe(root, ["worktree", "list", "--porcelain"]);
   const list = [];
   let cur = null;
   for (const line of out.split("\n")) {
@@ -114,7 +122,7 @@ async function listWorktrees(root) {
 }
 
 async function listRefs(root, ns) {
-  const out = await tryGit(root, [
+  const out = await probe(root, [
     "for-each-ref",
     `--format=%(refname:short)${US}%(objectname:short)${US}%(upstream:track)${US}%(committerdate:unix)`,
     "--sort=-committerdate",
@@ -139,7 +147,7 @@ async function listRefs(root, ns) {
 }
 
 async function listStashes(root) {
-  const out = await tryGit(root, ["stash", "list", `--format=%gd${US}%H${US}%s`]);
+  const out = await probe(root, ["stash", "list", `--format=%gd${US}%H${US}%s`]);
   return out
     .split("\n")
     .filter(Boolean)
@@ -177,16 +185,23 @@ function parseLog(out) {
     });
 }
 
+/**
+ * `rev` and `file` arrive from a query string. `file` is safe because it goes
+ * after `--`; a bare `rev` is not — `git log --output=.git/config` truncates
+ * the file it names. Validate it here rather than at each caller: this is
+ * where a string stops being data and becomes a git argument.
+ */
 async function log(root, { limit = 200, skip = 0, rev = null, file = null, all = false } = {}) {
   const args = ["log", `--format=${LOG_FORMAT}`, `--max-count=${limit}`, `--skip=${skip}`];
   if (all) args.push("--all");
-  if (rev) args.push(rev);
+  if (rev) args.push(Scope.ref(rev, "rev"));
   if (file) args.push("--", file);
-  return parseLog(await tryGit(root, args));
+  // A repo with no commits legitimately has no log; anything else is a fault.
+  return parseLog(await probe(root, args));
 }
 
 async function commitMeta(root, sha) {
-  const out = await git(root, ["show", "--no-patch", `--format=${LOG_FORMAT}`, sha]);
+  const out = await git(root, ["show", "--no-patch", `--format=${LOG_FORMAT}`, Scope.ref(sha, "sha")]);
   const [c] = parseLog(out);
   return c;
 }
@@ -240,55 +255,45 @@ function mergeFileLists(nameStatus, numstat) {
   return files;
 }
 
-/**
- * A scope is what we are diffing. Everything downstream (file list, diff, full
- * file content) is expressed in terms of one:
- *   {type:'worktree'}                — working tree + index vs HEAD (+ untracked)
- *   {type:'commit', sha}             — a single commit vs its first parent
- *   {type:'range', base, head}       — base...head, e.g. branch vs origin/main
- *
- * Commits resolve to an explicit two-dot pair rather than the tempting `sha^!`.
- * `sha^!` excludes *every* parent, so a merge commit diffs to nothing at all,
- * and a root commit has no `^` to exclude and silently diffs the wrong way
- * round. Naming both endpoints avoids both traps.
- */
-let emptyTreeCache = null;
+// ---------------------------------------------------------------------------
+// Scope resolution — see src/scope.js for what a scope is and which kinds exist
+// ---------------------------------------------------------------------------
+
+// Hardcoding 4b825dc… only works for sha1 repos; ask git instead. Keyed by root
+// because a sha256 repo in the same process has a different empty tree.
+const emptyTreeCache = new Map();
 async function emptyTree(root) {
-  // Hardcoding 4b825dc… only works for sha1 repos; ask git instead.
-  if (!emptyTreeCache) emptyTreeCache = (await git(root, ["hash-object", "-t", "tree", "/dev/null"])).trim();
-  return emptyTreeCache;
+  if (!emptyTreeCache.has(root)) {
+    emptyTreeCache.set(root, (await git(root, ["hash-object", "-t", "tree", "/dev/null"])).trim());
+  }
+  return emptyTreeCache.get(root);
 }
 
-async function scopeArgs(root, scope) {
-  if (scope.type === "commit") {
-    const parents = (await tryGit(root, ["rev-list", "--parents", "-n", "1", scope.sha]))
-      .trim()
-      .split(" ")
-      .slice(1);
-    // First parent only: for a merge that means "what this merge brought in",
-    // which is what a reviewer is looking at.
-    const from = parents[0] || (await emptyTree(root));
-    return [from, scope.sha];
-  }
-  if (scope.type === "range") return [`${scope.base}...${scope.head}`];
-  return ["HEAD"]; // worktree
+/** The three facts a scope kind may need from git, injected so scope.js stays browser-loadable. */
+function gitPort(root) {
+  return {
+    emptyTree: () => emptyTree(root),
+    headExists: async () => !!(await probe(root, ["rev-parse", "--verify", "--quiet", "HEAD"])).trim(),
+    parents: async (sha) =>
+      (await probe(root, ["rev-list", "--parents", "-n", "1", sha])).trim().split(" ").slice(1),
+  };
 }
+
+const scopeArgs = (root, scope) => Scope.diffArgs(scope, gitPort(root));
 
 async function changedFiles(root, scope) {
   const args = await scopeArgs(root, scope);
   const [ns, num] = await Promise.all([
-    tryGit(root, ["diff", "--no-color", "--name-status", "-M", ...args]),
-    tryGit(root, ["diff", "--no-color", "--numstat", "-M", ...args]),
+    git(root, ["diff", "--no-color", "--name-status", "-M", ...args]),
+    git(root, ["diff", "--no-color", "--numstat", "-M", ...args]),
   ]);
   const files = mergeFileLists(ns, num);
-  if (scope.type === "worktree") {
-    const untracked = (
-      await tryGit(root, ["ls-files", "--others", "--exclude-standard"])
-    )
+  if (Scope.isWorktree(scope)) {
+    const untracked = (await git(root, ["ls-files", "--others", "--exclude-standard"]))
       .split("\n")
       .filter(Boolean);
     const staged = new Set(
-      (await tryGit(root, ["diff", "--cached", "--name-only"])).split("\n").filter(Boolean)
+      (await git(root, ["diff", "--cached", "--name-only"])).split("\n").filter(Boolean)
     );
     for (const f of files) f.staged = staged.has(f.path);
     for (const p of untracked) {
@@ -368,7 +373,7 @@ async function fileDiff(root, scope, file, context = 1000000) {
   const sargs = await scopeArgs(root, scope);
   // `--numstat` reports binaries as `-  -` and costs one cheap call, which is
   // far better than streaming a megabyte of unified diff to discover the same.
-  const stat = (await tryGit(root, ["diff", "--no-color", "--numstat", "-M", ...sargs, "--", file]))
+  const stat = (await git(root, ["diff", "--no-color", "--numstat", "-M", ...sargs, "--", file]))
     .split("\t");
   if (stat[0] === "-" && stat[1] === "-") return { rows: [], binary: true };
   const changed = (+stat[0] || 0) + (+stat[1] || 0);
@@ -381,7 +386,7 @@ async function fileDiff(root, scope, file, context = 1000000) {
   } catch (e) {
     return { rows: [], binary: false, error: e.message };
   }
-  if (!text.trim() && scope.type === "worktree") {
+  if (!text.trim() && Scope.isWorktree(scope)) {
     // untracked file: synthesise an all-add diff
     const abs = path.join(root, file);
     if (fs.existsSync(abs)) {
@@ -402,7 +407,7 @@ async function fileDiff(root, scope, file, context = 1000000) {
 /** Whole-file content at a scope's "after" side — for reviewing untouched files. */
 async function fileContent(root, scope, file) {
   let text = null;
-  if (scope.type === "worktree") {
+  if (Scope.isWorktree(scope)) {
     const abs = path.join(root, file);
     if (fs.existsSync(abs)) {
       const st = fs.statSync(abs);
@@ -413,9 +418,8 @@ async function fileContent(root, scope, file) {
     }
   }
   if (text === null) {
-    const rev = scope.type === "commit" ? scope.sha : scope.type === "range" ? scope.head : "HEAD";
     try {
-      text = await git(root, ["show", `${rev}:${file}`]);
+      text = await git(root, ["show", `${Scope.rev(scope)}:${file}`]);
     } catch (e) {
       return { error: e.message };
     }
@@ -426,31 +430,35 @@ async function fileContent(root, scope, file) {
 
 /** Full repository file tree at a revision (Fork's "File Tree" tab). */
 async function tree(root, scope) {
-  const rev = scope.type === "commit" ? scope.sha : scope.type === "range" ? scope.head : "HEAD";
-  const out = await tryGit(root, ["ls-tree", "-r", "--name-only", rev]);
-  const paths = out.split("\n").filter(Boolean);
-  if (scope.type === "worktree") {
-    // Brand-new files are not in any tree yet, but they are the ones most
-    // worth browsing right after an agent run.
-    const extra = (await tryGit(root, ["ls-files", "--others", "--exclude-standard"]))
-      .split("\n")
-      .filter(Boolean)
-      .filter((p) => {
-        try {
-          return !fs.statSync(path.join(root, p)).isDirectory();
-        } catch {
-          return false;
-        }
-      });
-    paths.push(...extra);
-    paths.sort();
+  if (!Scope.isWorktree(scope)) {
+    const out = await git(root, ["ls-tree", "-r", "--name-only", Scope.rev(scope)]);
+    return out.split("\n").filter(Boolean);
   }
-  return paths;
+  /* What is on disk right now, which is not the same as any tree: a file that
+     is staged but never committed is in no tree yet, and `ls-tree HEAD` missed
+     it — as it missed everything in a repo with no commits at all. Both are
+     what an agent leaves behind, so ask the index instead. */
+  const [cached, others] = await Promise.all([
+    git(root, ["ls-files", "--cached"]),
+    git(root, ["ls-files", "--others", "--exclude-standard"]),
+  ]);
+  const paths = cached.split("\n").filter(Boolean);
+  // git lists ignored/symlinked directories as single "other" entries; those
+  // are not reviewable files. Tracked entries are always files, so this only
+  // costs a stat per untracked path.
+  for (const p of others.split("\n").filter(Boolean)) {
+    try {
+      if (!fs.statSync(path.join(root, p)).isDirectory()) paths.push(p);
+    } catch {
+      /* vanished between listing and stat */
+    }
+  }
+  return paths.sort();
 }
 
 module.exports = {
   git,
-  tryGit,
+  probe,
   repoRoot,
   overview,
   log,

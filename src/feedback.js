@@ -1,15 +1,9 @@
 "use strict";
+const Scope = require("./scope");
 
 // Conventional Comments (https://conventionalcomments.org) — same vocabulary
 // Plannotator uses, so agent-side handling is identical.
 const LABELS = ["suggestion", "nit", "question", "issue", "praise", "thought", "note", "todo", "chore"];
-
-function scopeLabel(scope) {
-  if (!scope) return "working tree";
-  if (scope.type === "commit") return `commit ${String(scope.sha).slice(0, 8)}`;
-  if (scope.type === "range") return `${scope.base}...${scope.head}`;
-  return "local changes (working tree vs HEAD)";
-}
 
 /**
  * Render annotations as markdown the agent can act on directly.
@@ -27,7 +21,7 @@ function render({ annotations = [], summary = "", decision = "annotated", scope,
   out.push("# Code review feedback");
   out.push("");
   out.push(
-    `Reviewed \`${repo || "repository"}\` — ${scopeLabel(scope)}. ` +
+    `Reviewed \`${repo || "repository"}\` — ${Scope.label(scope)}. ` +
       `${annotations.length} comment${annotations.length === 1 ? "" : "s"}.`
   );
 

@@ -44,8 +44,8 @@ function readStdin() {
  */
 async function fingerprint(root) {
   const [status, patch] = await Promise.all([
-    G.tryGit(root, ["status", "--porcelain"]),
-    G.tryGit(root, ["diff", "HEAD"]),
+    G.probe(root, ["status", "--porcelain"]),
+    G.probe(root, ["diff", "HEAD"]), // no HEAD yet in a repo with no commits
   ]);
   return crypto.createHash("sha1").update(status).update(patch).digest("hex");
 }
@@ -70,7 +70,17 @@ async function decide(input, opts = {}) {
     return { ...allow(), why: "not-a-repo" };
   }
 
-  const files = await G.changedFiles(root, { type: "worktree" });
+  // A git failure must not read as "nothing to review" — that is the one way
+  // this gate can be wrong and stay silent about it. We still allow the turn to
+  // end (a review tool that cannot read the repo has no business holding the
+  // agent hostage over its own failure), but `failed` makes `run` say so out
+  // loud instead of filing it under the silent reasons above.
+  let files;
+  try {
+    files = await G.changedFiles(root, { type: "worktree" });
+  } catch (e) {
+    return { ...allow(), failed: true, why: `git-error(${(e && e.message) || e})`, root };
+  }
   if (!files.length) return { ...allow(), why: "clean-tree", root };
   if (files.length < cfg.minFiles)
     return { ...allow(), why: `below-threshold(${files.length}<${cfg.minFiles})`, root };
@@ -97,7 +107,11 @@ async function run({ openReview }) {
 
   const d = await decide(input);
   if (d.verdict === "allow") {
-    if (process.env.DIFFOTATOR_DEBUG) process.stderr.write(`diffotator hook: allow (${d.why})\n`);
+    // The ordinary reasons are all "nothing worth looking at", and saying so
+    // every turn is noise. A failure is not one of them: unreviewed changes may
+    // be sitting there, so it is reported whether or not anyone asked for debug.
+    if (d.failed) process.stderr.write(`diffotator hook: could not inspect the repository — ${d.why}\n`);
+    else if (process.env.DIFFOTATOR_DEBUG) process.stderr.write(`diffotator hook: allow (${d.why})\n`);
     return stopOutput(null);
   }
 

@@ -60,26 +60,32 @@ function openBrowser(url) {
   execFile(cmd, [url], () => {});
 }
 
+// The browser needs a moment to paint its confirmation screen before the port
+// disappears from under it.
+const PAINT_MS = 400;
+
 /**
- * Run one review session to completion.
+ * Run one review session to completion. Owns the port, the browser, the signals
+ * and the teardown — the HTTP module only reports that a decision arrived.
  * @returns {Promise<{decision: string, output: string}>}
  */
 function serveReview(root, { open = true, port = 0, title } = {}) {
+  const server = createServer({ root, title });
   return new Promise((resolve) => {
-    let done = false;
-    const finish = (output, decision) => {
-      if (done) return;
-      done = true;
-      server.close(() => resolve({ decision, output }));
-      setTimeout(() => resolve({ decision, output }), 300).unref();
+    const finish = (result) => {
+      setTimeout(() => server.close(() => resolve(result)), PAINT_MS);
+      // A socket that refuses to close must not hang the turn. A second resolve
+      // is a no-op, so this needs no guard flag.
+      setTimeout(() => resolve(result), PAINT_MS + 500).unref();
     };
-    const server = createServer({ root, finish, title });
+    server.submitted.then(finish);
     server.listen(port, "127.0.0.1", () => {
       const url = `http://localhost:${server.address().port}`;
       process.stderr.write(`\n  diffotator  ${path.basename(root)}\n  ${url}\n\n`);
       if (open) openBrowser(url);
     });
-    const bail = () => finish("Review session closed without feedback.", "dismissed");
+    const bail = () =>
+      finish({ decision: "dismissed", output: "Review session closed without feedback." });
     process.on("SIGINT", bail);
     process.on("SIGTERM", bail);
   });
