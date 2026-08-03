@@ -419,6 +419,9 @@ async function scopeKinds() {
   assert.throws(() => Scope.parse("range:-x...HEAD"), /invalid base/);
   assert.throws(() => Scope.parse("commit:a b"), /invalid sha/, "whitespace refused");
   assert.throws(() => Scope.encode({ type: "commit", sha: "--evil" }), /invalid sha/, "refused on the way out too");
+  // The same check is exported for the revisions that reach git outside a scope.
+  assert.strictEqual(Scope.ref("origin/main", "rev"), "origin/main");
+  assert.throws(() => Scope.ref("--output=.git/config", "rev"), /invalid rev/);
 
   // diffArgs names both sides. The git facts arrive through an injected port.
   const port = {
@@ -492,6 +495,34 @@ async function brokenAndEmptyRepos() {
   const verdict = await H.decide({ cwd: bad }, { minFiles: 1 });
   assert.strictEqual(verdict.verdict, "allow", "a broken repo does not open a browser");
   assert.match(verdict.why, /^git-error/, "…and says so, instead of claiming the tree is clean");
+  assert.strictEqual(verdict.failed, true, "…marked as a failure, not one of the quiet reasons");
+
+  /* A reason nobody can see is still a silent failure, so exercise the real
+     entry point: `run` must report this one without DIFFOTATOR_DEBUG, and must
+     still let the turn end rather than holding the agent hostage over a broken
+     repo it cannot do anything about. */
+  const cwd = process.cwd();
+  const tty = process.stdin.isTTY;
+  const write = process.stderr.write.bind(process.stderr);
+  const said = [];
+  process.chdir(bad);
+  process.stdin.isTTY = true; // no harness on the pipe; do not wait for one
+  process.stderr.write = (s) => (said.push(String(s)), true);
+  delete process.env.DIFFOTATOR_DEBUG;
+  try {
+    const out = await H.run({
+      openReview: () => assert.fail("a repo we cannot read must not open a browser"),
+    });
+    assert.deepStrictEqual(out, {}, "the turn still ends");
+  } finally {
+    process.stderr.write = write;
+    process.stdin.isTTY = tty;
+    process.chdir(cwd);
+  }
+  assert.ok(
+    said.some((s) => /could not inspect the repository/.test(s)),
+    "the failure reaches stderr, not just the return value"
+  );
 
   fs.rmSync(fresh, { recursive: true, force: true });
   fs.rmSync(bad, { recursive: true, force: true });
@@ -547,9 +578,40 @@ async function httpSurface() {
     "a commit scope survives the round trip through the query string"
   );
 
+  // Commit metadata and a rev-filtered log: the two endpoints that hand a
+  // caller-supplied revision to git *outside* a scope.
+  const one = await json(`/api/commit?sha=${head.sha}`);
+  assert.strictEqual(one.meta.subject, "init", "commit metadata round-trips");
+  assert.deepStrictEqual(
+    one.files.map((f) => f.path),
+    ["a.ts"]
+  );
+  assert.strictEqual((await json("/api/commits?rev=main")).commits.length, 1, "a rev-filtered log works");
+
   // A malformed scope is refused rather than quietly reviewed as the worktree.
   assert.strictEqual(await status("/api/files?scope=commit:--upload-pack=evil"), 500);
   assert.strictEqual(await status("/api/files?scope=nonsense"), 500);
+
+  /* `sha` and `rev` reach git outside a scope, and a revision that git reads as
+     an option is not a parse error — `--output=<path>` truncates the file it
+     names. Any page in the browser can reach this loopback port, so the check
+     has to hold at the HTTP edge, not just in the scope vocabulary. */
+  const config = path.join(d, ".git", "config");
+  const before = fs.readFileSync(config, "utf8");
+  for (const p of [
+    "/api/commit?sha=--output%3D.git%2Fconfig",
+    "/api/commits?rev=--output%3D.git%2Fconfig",
+    "/api/commits?rev=-x",
+  ]) {
+    assert.strictEqual(await status(p), 500, `refused: ${p}`);
+  }
+  assert.strictEqual(fs.readFileSync(config, "utf8"), before, "and nothing was written over");
+  // Ordinary revisions still work — the check refuses options, not history.
+  assert.ok((await json("/api/commits?rev=HEAD")).commits.length, "HEAD is still a revision");
+  // …and so are bare revisions, which reach git without a scope to guard them.
+  // `git log --output=<path>` truncates the file it names.
+  assert.strictEqual(await status("/api/commits?rev=--output=pwned"), 500);
+  assert.strictEqual(await status("/api/commit?sha=-x"), 500);
   // Method is part of the route, so a GET to a mutating endpoint is not a 200.
   assert.strictEqual(await status("/api/submit"), 404);
   assert.strictEqual(await status("/api/nope"), 404);

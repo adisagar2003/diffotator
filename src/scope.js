@@ -105,6 +105,8 @@
 
   exp.parse = parse;
   exp.encode = encode;
+  /** The same check, for the revisions that reach git outside a scope (`log`, `commitMeta`). */
+  exp.ref = ref;
   /** Human text, one register for both the header chip and the feedback markdown. */
   exp.label = (scope) => kindOf(scope).label(scope || {});
   /** The revision whose "after" side this scope shows — for `git show` / `ls-tree`. */
