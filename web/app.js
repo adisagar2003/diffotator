@@ -460,15 +460,16 @@ function selectCommit(sha) {
 }
 
 /*
- * The commit's story rides above its diff instead of living in a tab. The old
- * Commit tab was a passive pane only `selectCommit` ever filled, which left it
- * empty on arrival and stale after any scope change — two ways of lying about
- * what is on screen. The banner is derived from the scope: it exists exactly
- * while the scope is one commit, so neither failure state can be expressed.
+ * The commit's story sits in the left pane, right above the timeline it was
+ * picked from — not in a tab, not on top of the diff. The old Commit tab was
+ * a passive pane only `selectCommit` ever filled, which left it empty on
+ * arrival and stale after any scope change — two ways of lying about what is
+ * on screen. This card is derived from the scope: it exists exactly while the
+ * scope is one commit, so neither failure state can be expressed.
  */
 let bannerDismissed = null; // sha the reader closed; the next explicit commit click resets it
 async function updateCommitBanner(scope) {
-  const el = $("#commitBanner");
+  const el = $("#commitInfo");
   if (scope.type !== "commit") S.commitMeta = null;
   if (scope.type !== "commit" || bannerDismissed === scope.sha) {
     el.hidden = true;
@@ -1791,6 +1792,16 @@ async function loadTree() {
 }
 document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => setTab(t.dataset.tab)));
 
+/* Collapse is display:none rather than width 0 so the splitter goes with it
+   and the file/diff panes reclaim the space. */
+function toggleSidebar() {
+  const off = $("#sidebar").classList.toggle("off");
+  document.querySelector('.vsplit[data-target="sidebar"]').style.display = off ? "none" : "";
+  diffVL.paint(true);
+  commitVL.paint(true);
+}
+$("#btnSidebar").onclick = toggleSidebar;
+
 $("#segSplit").onclick = () => setView("split");
 $("#segUnified").onclick = () => setView("unified");
 function setView(v) {
@@ -2310,6 +2321,9 @@ document.addEventListener("keydown", (e) => {
       break;
     case "c":
       commentOnFocus();
+      break;
+    case "b":
+      toggleSidebar();
       break;
   }
 });

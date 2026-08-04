@@ -10,6 +10,7 @@
 
 <div id="topbar">
   <div class="tb-left">
+    <button id="btnSidebar" class="btn ghost" title="Toggle sidebar (b)">☰</button>
     <span id="repoName" class="repo"></span>
     <span id="branchChip" class="chip branch"></span>
     <span id="scopeChip" class="chip scope"></span>
@@ -57,8 +58,6 @@
         </div>
       </div>
 
-      <div id="commitBanner" class="commit-banner" hidden></div>
-
       <div id="panes">
         <div id="leftPane">
           <div class="filter-row">
@@ -71,6 +70,7 @@
             <button class="icotog" data-foldtoggle aria-label="Fold all files"></button>
           </div>
           <div id="fileTree" class="tree" tabindex="0"></div>
+          <div id="commitInfo" class="commit-info" hidden></div>
           <div class="hsplit invert" id="tlSplit" data-target="timelinePane" hidden></div>
           <div id="timelinePane" hidden>
             <div class="tl-head">
@@ -161,6 +161,7 @@
       <tr><td><kbd>f</kbd></td><td>full file / diff only</td></tr>
       <tr><td><kbd>v</kbd></td><td>mark viewed &amp; go to next unviewed</td></tr>
       <tr><td><kbd>t</kbd></td><td>toggle comments panel</td></tr>
+      <tr><td><kbd>b</kbd></td><td>toggle sidebar</td></tr>
       <tr><td><kbd>/</kbd></td><td>filter files</td></tr>
       <tr><td><kbd>⌘⏎</kbd></td><td>save comment / send feedback</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>close popover, dialog or filter</td></tr>

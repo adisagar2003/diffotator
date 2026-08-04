@@ -78,6 +78,7 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
    pseudo-element, not an outline: diff rows and file rows paint over their
    ancestor's own border. */
 #sidebar,#leftPane,#commentsPanel{position:relative}
+#sidebar.off{display:none}
 #sidebar:focus-within::after,#commitPane:focus-within::after,#leftPane:focus-within::after,
 #rightPane:focus-within::after,#commentsPanel:focus-within::after{
   content:"";position:absolute;inset:0;pointer-events:none;z-index:20;
@@ -357,18 +358,18 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .k{color:#c792ea}.s{color:#c3e88d}.n{color:#f78c6c}.c{color:#5f6773;font-style:italic}
 .f{color:#82aaff}.t{color:#ffcb6b}.p{color:#89ddff}
 
-/* ---------- commit banner ---------- */
-.commit-banner{
-  flex:0 0 auto;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--border);
-  font-family:var(--ui)
+/* ---------- commit info card (left pane, above the timeline) ---------- */
+.commit-info{
+  flex:0 0 auto;padding:7px 10px;background:var(--elev);border-top:1px solid var(--border);
+  font-family:var(--ui);max-height:40%;overflow:auto
 }
 .cb-head{display:flex;align-items:baseline;gap:8px}
-.cb-subject{font-size:13.5px;font-weight:600;flex:1;min-width:0}
-.cb-meta{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-top:3px;font-size:11.5px;color:var(--muted)}
-.cb-meta .mono{font-family:var(--mono);font-size:11px}
+.cb-subject{font-size:12.5px;font-weight:600;flex:1;min-width:0}
+.cb-meta{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-top:3px;font-size:11px;color:var(--muted)}
+.cb-meta .mono{font-family:var(--mono);font-size:10.5px}
 .cb-body{
-  font:12px/1.55 var(--mono);white-space:pre-wrap;background:var(--elev);border:1px solid var(--border);
-  border-radius:6px;padding:8px 10px;margin:8px 0 2px;max-height:7.5em;overflow:auto
+  font:11.5px/1.55 var(--mono);white-space:pre-wrap;background:var(--panel);border:1px solid var(--border);
+  border-radius:6px;padding:7px 9px;margin:7px 0 2px;max-height:9em;overflow:auto
 }
 
 /* ---------- commit timeline ---------- */
