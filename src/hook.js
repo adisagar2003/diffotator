@@ -18,11 +18,33 @@ const G = require("./git");
 const D = require("./drafts");
 
 const OFF = /^(0|off|false|no)$/i;
+const DEFAULT_MIN_FILES = 3;
+
+/**
+ * `Math.max` propagates NaN rather than ignoring it, so a typo in a shell
+ * profile used to leave `minFiles` NaN — and `files.length < NaN` is false for
+ * every count, which deletes the threshold instead of clamping it. A value we
+ * cannot read falls back to the default *and says so*: an ignored setting is
+ * not one of the "nothing worth looking at" reasons this module stays quiet
+ * about, and the symptom otherwise is a review on every single turn with
+ * nothing on screen explaining why.
+ */
+function readMinFiles(raw) {
+  if (!raw) return DEFAULT_MIN_FILES;
+  const n = +raw;
+  if (!Number.isFinite(n)) {
+    process.stderr.write(
+      `diffotator hook: DIFFOTATOR_HOOK_MIN_FILES=${raw} is not a number — using ${DEFAULT_MIN_FILES}\n`
+    );
+    return DEFAULT_MIN_FILES;
+  }
+  return Math.max(1, n);
+}
 
 function config() {
   return {
     enabled: !OFF.test(process.env.DIFFOTATOR_HOOK || ""),
-    minFiles: Math.max(1, +(process.env.DIFFOTATOR_HOOK_MIN_FILES || 3)),
+    minFiles: readMinFiles(process.env.DIFFOTATOR_HOOK_MIN_FILES),
   };
 }
 

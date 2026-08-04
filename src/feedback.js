@@ -10,11 +10,14 @@ const LABELS = ["suggestion", "nit", "question", "issue", "praise", "thought", "
  * Grouped by file, ordered by line, blocking items called out.
  */
 function render({ annotations = [], summary = "", decision = "annotated", scope, repo }) {
-  if (decision === "approved" && !annotations.length && !summary.trim()) {
-    return "The user approved.";
-  }
   if (decision === "dismissed") {
     return "Review session closed without feedback.";
+  }
+  // Nothing written is nothing to send, whichever button we arrived by. An
+  // empty `annotated` used to render the whole scaffold around zero comments:
+  // "0 comments" under "address every comment above".
+  if (!annotations.length && !summary.trim()) {
+    return decision === "approved" ? "The user approved." : "";
   }
 
   const out = [];
