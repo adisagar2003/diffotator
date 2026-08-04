@@ -487,6 +487,9 @@ async function updateCommitBanner(scope) {
     show(false);
     return;
   }
+  // A card describing the previous commit must not sit there looking current
+  // while this one's metadata is fetched — hide it for the gap instead.
+  if (el.dataset.sha !== sha) show(false);
   let meta;
   try {
     ({ meta } = await api("commit", { sha }, { cached: true }));
@@ -501,6 +504,7 @@ async function updateCommitBanner(scope) {
       : S.scope.type === "range" && !!S.tl && S.tl.sel === sha;
   if (!meta || !still) return;
   S.commitMeta = meta;
+  el.dataset.sha = sha;
   el.innerHTML = `
     <div class="cb-head">
       <span class="cb-subject">${esc(meta.subject)}</span>
@@ -552,6 +556,9 @@ async function syncTimeline(scope) {
   } catch {
     return;
   }
+  // At the cap we cannot know the list is complete, and the bottom row must
+  // not be labelled "oldest" when a hundred older commits are in the diff.
+  const truncated = commits.length >= 500;
   /* Guard on our own request token, not on scopeSeq: navigating *within* the
      timeline bumps the scope seq without re-anchoring, and a click racing this
      fetch must not throw the commits away — that left the panel empty for
@@ -559,6 +566,7 @@ async function syncTimeline(scope) {
      older response overwrites the newer list; the token settles both. */
   if (!S.tl || S.tl.req !== req) return;
   S.tl.commits = commits; // newest-first, the order every git tool trains the eye for
+  S.tl.truncated = truncated;
   renderTimeline();
 }
 
@@ -575,12 +583,15 @@ function renderTimeline() {
       return `<div class="tl-row all${r.sel ? " sel" : ""}" data-tlall><span class="tl-sub">All branch changes</span></div>`;
     // Newest/oldest tags orient the list; dimming shows which commits the
     // current selection's diff actually contains.
-    const tag = arr.length > 2 && i === 1 ? "newest" : arr.length > 2 && i === arr.length - 1 ? "oldest" : "";
+    const tag =
+      arr.length > 2 && i === 1 ? "newest"
+      : arr.length > 2 && i === arr.length - 1 && !S.tl.truncated ? "oldest"
+      : "";
     return `<div class="tl-row${r.sel ? " sel" : ""}${r.included ? "" : " dim"}" data-tlsha="${r.sha}">
          <span class="tl-sha">${esc(r.short)}</span><span class="tl-sub" title="${esc(r.subject)}">${esc(r.subject)}</span>${tag ? `<span class="tl-tag">${tag}</span>` : ""}</div>`;
   });
   $("#timeline").innerHTML = rows.join("");
-  $("#tlCount").textContent = S.tl.commits ? String(S.tl.commits.length) : "";
+  $("#tlCount").textContent = S.tl.commits ? String(S.tl.commits.length) + (S.tl.truncated ? "+" : "") : "";
   $("#segUpto").classList.toggle("active", S.tl.mode === "upto");
   $("#segOnly").classList.toggle("active", S.tl.mode === "only");
 }
@@ -1900,11 +1911,18 @@ const Prefs = {
   // so a concurrent session's settings are never clobbered by our snapshot
   timer: null,
   async load() {
+    let disk = {};
     try {
-      this.data = (await api("prefs")) || {};
+      disk = (await api("prefs")) || {};
     } catch {
-      this.data = {}; // defaults are always an acceptable answer
+      /* defaults are always an acceptable answer */
     }
+    /* Merge under, never replace: the ☰ button and the splitters are live
+       while this request is in flight, and a click in that window has already
+       written into `data`. Replacing would invert memory against disk — the
+       click's value POSTs, but memory holds the disk value, so the reader's
+       next toggle no-ops on the equality guard and the wrong state sticks. */
+    this.data = { ...disk, ...this.data };
   },
   get(key, dflt) {
     return key in this.data ? this.data[key] : dflt;
@@ -1976,7 +1994,11 @@ function lineText(file, side, line) {
 
 function openPopover(anchor, file, side, line) {
   const existing = S.ann.find((a) => a.file === file && a.side === side && a.line === line);
-  S.popFor = { file, side, line, id: existing ? existing.id : null };
+  /* The scope is snapshotted now, not read at save: the popover has no
+     backdrop, so the reader can switch scope (a timeline click is a normal
+     "which commit did this?" move) with a draft open — and the comment's line
+     anchor belongs to the diff it was opened against, so its tag must too. */
+  S.popFor = { file, side, line, id: existing ? existing.id : null, scope: S.scope, meta: S.commitMeta };
   S.popLabel = existing ? existing.label : "suggestion";
   S.focus = { file, side, line };
 
@@ -2052,9 +2074,10 @@ function savePopover() {
     lang: extOf(p.file),
   };
   // Tagged at creation, never re-tagged — the rule lives in RM.annCommit so
-  // node test.js can hold it.
+  // node test.js can hold it. The scope comes from the popover's snapshot,
+  // not the live S.scope: the scope may have moved while the draft was open.
   const i = S.ann.findIndex((a) => a.id === rec.id);
-  const tag = RM.annCommit(i >= 0 ? S.ann[i] : null, S.scope, S.commitMeta);
+  const tag = RM.annCommit(i >= 0 ? S.ann[i] : null, p.scope, p.meta);
   if (tag) rec.commit = tag;
   if (i >= 0) S.ann[i] = rec;
   else S.ann.push(rec);
@@ -2237,7 +2260,9 @@ document.querySelectorAll(".vsplit,.hsplit").forEach((sp) => {
       let d = (horiz ? ev.clientX : ev.clientY) - start;
       // A splitter above its target (the timeline pane) grows it by dragging up.
       if (sp.classList.contains("invert")) d = -d;
-      const v = Math.max(120, base + d);
+      // The floor is per target: the info card's natural height sits below the
+      // default, and a shared 120 would snap it open on the first pixel.
+      const v = Math.max(+sp.dataset.min || 120, base + d);
       if (horiz) target.style.width = v + "px";
       else target.style.height = v + "px";
     };
