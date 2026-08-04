@@ -76,8 +76,15 @@ const apiUrl = (path, params) => `/api/${path}?${new URLSearchParams(params)}`;
 async function api(path, params = {}, { cached = false } = {}) {
   const url = apiUrl(path, params);
   if (cached && cache.has(url)) return cache.get(url);
-  const p = fetch(url).then((r) => r.json());
-  if (cached) cache.set(url, p);
+  const p = fetch(url).then(async (r) => {
+    const body = await r.json();
+    if (!r.ok) throw new Error((body && body.error) || `request failed (${r.status})`);
+    return body;
+  });
+  if (cached) {
+    cache.set(url, p);
+    p.catch(() => cache.delete(url)); // a failure must not be replayed from cache
+  }
   return p;
 }
 /* One canonical string names a scope on the wire, in the request cache and in
@@ -405,18 +412,24 @@ const COMMIT_PAGE = 300;
 async function loadMoreCommits() {
   if (S.loadingMore || S.commitsDone) return;
   S.loadingMore = true;
-  const { commits } = await api("commits", {
-    limit: COMMIT_PAGE,
-    skip: S.commits.length,
-    ...(S.commitRev ? { rev: S.commitRev } : {}),
-  });
-  if (commits.length < COMMIT_PAGE) S.commitsDone = true;
-  if (commits.length) {
-    S.commits = S.commits.concat(commits);
-    S.graph = computeGraph(S.commits);
-    commitVL.refresh();
+  try {
+    // A failed page fetch must not take down the commit pane — leave the list
+    // as it was and let the next scroll tick try again.
+    const { commits } = await api("commits", {
+      limit: COMMIT_PAGE,
+      skip: S.commits.length,
+      ...(S.commitRev ? { rev: S.commitRev } : {}),
+    });
+    if (commits.length < COMMIT_PAGE) S.commitsDone = true;
+    if (commits.length) {
+      S.commits = S.commits.concat(commits);
+      S.graph = computeGraph(S.commits);
+      commitVL.refresh();
+    }
+  } catch {
+  } finally {
+    S.loadingMore = false;
   }
-  S.loadingMore = false;
 }
 $("#commitList").addEventListener(
   "scroll",
@@ -429,10 +442,17 @@ $("#commitList").addEventListener(
 
 async function loadCommits(select = true) {
   S.commitsDone = false;
-  const { commits } = await api("commits", {
-    limit: COMMIT_PAGE,
-    ...(S.commitRev ? { rev: S.commitRev } : {}),
-  });
+  let commits;
+  try {
+    // A failed side-panel fetch must not take down the page — leave whatever
+    // commit list was already on screen.
+    ({ commits } = await api("commits", {
+      limit: COMMIT_PAGE,
+      ...(S.commitRev ? { rev: S.commitRev } : {}),
+    }));
+  } catch {
+    return;
+  }
   if (commits.length < COMMIT_PAGE) S.commitsDone = true;
   S.commits = commits;
   S.graph = computeGraph(commits);
@@ -449,8 +469,12 @@ async function selectCommit(sha) {
   S.selCommit = sha;
   commitVL.refresh();
   setScope({ type: "commit", sha }, "Commit", true);
-  const { meta } = await api("commit", { sha }, { cached: true });
-  renderCommitDetail(meta);
+  try {
+    // A failed side-panel fetch must not take down the page — leave whatever
+    // commit detail was already showing.
+    const { meta } = await api("commit", { sha }, { cached: true });
+    renderCommitDetail(meta);
+  } catch {}
 }
 
 function renderCommitDetail(m) {
@@ -490,7 +514,14 @@ async function setScope(scope, name, keepCommits) {
   $("#scopeChip").textContent = Scope.label(scope);
   if (!keepCommits) collapseCommits(scope.type !== "commit");
   sidebar();
-  const { files } = await api("files", scopeParams(), { cached: true });
+  let files;
+  try {
+    ({ files } = await api("files", scopeParams(), { cached: true }));
+  } catch {
+    // The existing no-changes empty state is the fallback — better than a dead
+    // scope switch that leaves the previous scope's files on screen.
+    files = [];
+  }
   if (seq !== scopeSeq) return;
   S.files = files;
   render();
@@ -801,6 +832,51 @@ $("#fileFilter").addEventListener("input", (e) => {
 // ---------------------------------------------------------------------------
 // diff loading + rendering
 // ---------------------------------------------------------------------------
+/** Fetch one file's diff and slot it into the stream. Shared by the stream
+    filler and any jump that must wait for a specific file. Returns after the
+    store+rebuild; a scope change mid-flight discards the arrival. */
+async function loadFileDiff(path) {
+  const sid = scopeId();
+  const params = { ...scopeParams(), file: path };
+  try {
+    /* No `full: "1"` here. The diff already arrives with full context, so
+       "Full file" only has to stop folding — asking for the whole file as
+       well would render every line while the checkbox read unchecked, and
+       would make the empty/mode-only notes unreachable. Only the File Tree
+       tab, which has no diff, fetches whole files. */
+    const r = await api("diff", params, { cached: true });
+    if (scopeId() !== sid) return; // scope changed mid-flight
+    const d = r.diff || {};
+    S.perFile.set(path, {
+      loaded: true,
+      rows: d.rows || null,
+      fullRows: null,
+      expanded: new Set(),
+      full: false,
+      binary: d.binary,
+      tooBig: d.tooBig,
+      error: d.error,
+      empty: d.empty,
+      mode: d.mode,
+    });
+  } catch {
+    if (scopeId() !== sid) return; // scope changed mid-flight
+    // A rejected fetch would otherwise cache its own rejection forever —
+    // every future read of this url replays the same failure. Evict it so
+    // the next fetchStream (a fresh scope, a retry) gets a clean attempt.
+    cache.delete(apiUrl("diff", params));
+    S.perFile.set(path, {
+      loaded: true,
+      rows: null,
+      fullRows: null,
+      expanded: new Set(),
+      full: false,
+      error: "could not load diff",
+    });
+  }
+  rebuildStream();
+}
+
 let streamSeq = 0;
 /** Fetch every selected, not-yet-loaded file, a few at a time, in list order.
     Each arrival re-slots into the stream; the reader reads while it fills. */
@@ -810,46 +886,13 @@ async function fetchStream() {
   const CONCURRENCY = 4;
   let next = 0;
   const worker = async () => {
-    while (next < queue.length) {
+    // Selection/scope churn stops a worker from pulling further queue entries;
+    // an entry already in flight still stores its arrival — loadFileDiff's own
+    // scope guard covers that, and storing into a file the reader deselected
+    // mid-flight is harmless, since deselected files simply aren't rendered.
+    while (next < queue.length && seq === streamSeq) {
       const path = queue[next++];
-      const params = { ...scopeParams(), file: path };
-      try {
-        /* No `full: "1"` here. The diff already arrives with full context, so
-           "Full file" only has to stop folding — asking for the whole file as
-           well would render every line while the checkbox read unchecked, and
-           would make the empty/mode-only notes unreachable. Only the File Tree
-           tab, which has no diff, fetches whole files. */
-        const r = await api("diff", params, { cached: true });
-        if (seq !== streamSeq) return; // scope changed mid-flight
-        const d = r.diff || {};
-        S.perFile.set(path, {
-          loaded: true,
-          rows: d.rows || null,
-          fullRows: null,
-          expanded: new Set(),
-          full: false,
-          binary: d.binary,
-          tooBig: d.tooBig,
-          error: d.error,
-          empty: d.empty,
-          mode: d.mode,
-        });
-      } catch {
-        if (seq !== streamSeq) return; // scope changed mid-flight
-        // A rejected fetch would otherwise cache its own rejection forever —
-        // every future read of this url replays the same failure. Evict it so
-        // the next fetchStream (a fresh scope, a retry) gets a clean attempt.
-        cache.delete(apiUrl("diff", params));
-        S.perFile.set(path, {
-          loaded: true,
-          rows: null,
-          fullRows: null,
-          expanded: new Set(),
-          full: false,
-          error: "could not load diff",
-        });
-      }
-      rebuildStream();
+      await loadFileDiff(path);
     }
   };
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
@@ -971,10 +1014,17 @@ function stepFile(dir) {
 async function selectTreeFile(path) {
   S.selFile = path;
   renderFileTree();
-  const { full } = await api("file", { ...scopeParams(), file: path }, { cached: true });
-  if (S.selFile !== path) return;
-  S.treeRows = full && full.rows ? full.rows : null;
-  S.treeDiff = full;
+  try {
+    const { full } = await api("file", { ...scopeParams(), file: path }, { cached: true });
+    if (S.selFile !== path) return;
+    S.treeRows = full && full.rows ? full.rows : null;
+    S.treeDiff = full;
+  } catch (e) {
+    if (S.selFile !== path) return;
+    // renderTreeFile's existing meta.error branch renders "Could not read this file."
+    S.treeDiff = { error: String((e && e.message) || e) };
+    S.treeRows = null;
+  }
   renderDiff();
 }
 
@@ -1603,7 +1653,14 @@ function setTab(tab) {
  */
 async function loadTree() {
   const seq = scopeSeq;
-  const { paths } = await api("tree", scopeParams(), { cached: true });
+  let paths;
+  try {
+    // A failed side-panel fetch must not take down the page — leave whatever
+    // tree was already there and let the next tab click retry.
+    ({ paths } = await api("tree", scopeParams(), { cached: true }));
+  } catch {
+    return;
+  }
   if (seq !== scopeSeq) return;
   S.treePaths = paths;
   renderFileTree();
@@ -1829,6 +1886,13 @@ $("#cpList").addEventListener("click", async (e) => {
     if (!S.files.some((f) => f.path === a.file)) setTab("tree");
     await scrollToFile(a.file);
   }
+  // The file's diff may not have arrived yet — early after boot/scope switch,
+  // or because scrollToFile just re-selected a file that was deselected. Wait
+  // for it rather than racing rowIndexFor against a loading placeholder. Only
+  // for a stream jump: on the tree tab loadFileDiff's rebuildStream() would
+  // run buildItems against the stream and stomp renderTreeFile's own state
+  // (e.g. its "Could not read this file" note) with the stream's empty hint.
+  if (S.tab !== "tree" && !(S.perFile.get(a.file) || {}).loaded) await loadFileDiff(a.file);
   // Line numbers repeat across a stream, so the file has to be part of the match.
   const target = RM.rowIndexFor(S.items, a.side, a.line, a.file);
   if (target >= 0) {

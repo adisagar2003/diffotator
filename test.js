@@ -374,6 +374,107 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   );
 }
 
+/* --- buildStream: per-file memoization --------------------------------------
+   Every arrival used to rebuild every OTHER loaded file's rows too, so filling
+   a large stream did quadratic work. buildStream now caches each file's body
+   on the perFile state object the caller owns, keyed on everything the body
+   depends on; only the fileHeader stays built fresh every call. */
+{
+  const ctx = (i) => ({ t: "ctx", o: i, n: i, s: "line" + i });
+  const mkRows = (n, changeAt) => {
+    const rows = [];
+    for (let i = 1; i <= n; i++) {
+      if (i === changeAt) {
+        rows.push({ t: "del", o: i, s: "old" + i });
+        rows.push({ t: "add", n: i, s: "new" + i });
+      } else rows.push(ctx(i));
+    }
+    return rows;
+  };
+  const files = [
+    { path: "a.js", additions: 1, deletions: 1, status: "modified" },
+    { path: "b.js", additions: 1, deletions: 1, status: "modified" },
+  ];
+  const stA = { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false };
+  const stB = { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false };
+  const perFile = new Map([
+    ["a.js", stA],
+    ["b.js", stB],
+  ]);
+  const mkBase = (overrides) => ({
+    files,
+    selected: new Set(["a.js", "b.js"]),
+    collapsed: new Set(),
+    perFile,
+    annotations: [],
+    view: "split",
+    viewedSet: new Set(),
+    ...overrides,
+  });
+  const bodyOf = (out, fileIdx) => out.items.slice(out.segments[fileIdx].start + 1, out.segments[fileIdx].end);
+
+  // 1. identical inputs (same Map, same st objects) → the row items for a file
+  //    are the SAME object references both times, and outputs deep-equal.
+  const r1 = RM.buildStream(mkBase());
+  const r2 = RM.buildStream(mkBase());
+  const bodyA1 = bodyOf(r1, 0);
+  const bodyA2 = bodyOf(r2, 0);
+  assert.strictEqual(bodyA1[0], bodyA2[0], "a.js's first body item is the same object reference across rebuilds");
+  assert.deepStrictEqual(r1, r2, "identical inputs produce deep-equal output");
+
+  // 2. opening a fold invalidates just that file's cache and reflects the change.
+  const foldItem = bodyA1.find((it) => it.k === "fold");
+  assert.ok(foldItem, "fixture has a fold to open");
+  stA.expanded = new Set([foldItem.id]);
+  const r3 = RM.buildStream(mkBase());
+  const bodyA3 = bodyOf(r3, 0);
+  assert.notStrictEqual(bodyA3[0], bodyA1[0], "opening a fold invalidates the cached body");
+  assert.ok(!bodyA3.some((it) => it.k === "fold" && it.id === foldItem.id), "the opened fold no longer renders as a marker");
+  stA.expanded = new Set(); // restore, so later steps compare against the same baseline
+
+  // 3. changing the view invalidates the cache and re-stamps v on the rows.
+  const rSplit = RM.buildStream(mkBase({ view: "split" }));
+  const rowSplit = bodyOf(rSplit, 0).find((it) => it.k === "row");
+  assert.strictEqual(rowSplit.v, "split");
+  const rUnified = RM.buildStream(mkBase({ view: "unified" }));
+  const rowUnified = bodyOf(rUnified, 0).find((it) => it.k === "row");
+  assert.strictEqual(rowUnified.v, "unified", "view change re-stamps v");
+  assert.notStrictEqual(rowSplit, rowUnified, "a different view produces a different cached body");
+
+  // 4. adding an annotation on the file invalidates its cache and the card appears.
+  const r4a = RM.buildStream(mkBase());
+  const ann1 = [{ id: "z1", file: "a.js", side: "new", line: 10, body: "hi" }];
+  const r4b = RM.buildStream(mkBase({ annotations: ann1 }));
+  const bodyA4a = bodyOf(r4a, 0);
+  const bodyA4b = bodyOf(r4b, 0);
+  assert.notStrictEqual(bodyA4a[0], bodyA4b[0], "an annotation on this file invalidates its own cache");
+  assert.ok(bodyA4b.some((it) => it.k === "comment"), "the comment card appears in the rebuilt body");
+
+  // 5. an annotation on a DIFFERENT file leaves this file's body reference unchanged.
+  const ann2 = ann1.concat([{ id: "z2", file: "b.js", side: "new", line: 10, body: "other" }]);
+  const r5 = RM.buildStream(mkBase({ annotations: ann2 }));
+  const bodyA5 = bodyOf(r5, 0);
+  assert.strictEqual(bodyA4b[0], bodyA5[0], "a.js's cache survives an annotation added only to b.js");
+
+  // 6. equivalence: memoized output deep-equals a completely fresh, un-memoized
+  //    build — same kinds, same order, same v/sg stamps.
+  const freshPerFile = new Map([
+    ["a.js", { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false }],
+    ["b.js", { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false }],
+  ]);
+  const memoized = RM.buildStream(mkBase({ annotations: ann2 }));
+  const fresh = RM.buildStream({ ...mkBase({ annotations: ann2 }), perFile: freshPerFile });
+  assert.strictEqual(memoized.items.length, fresh.items.length, "same item count");
+  for (let i = 0; i < memoized.items.length; i++) {
+    assert.strictEqual(memoized.items[i].k, fresh.items[i].k, `item ${i} kind matches`);
+    if (memoized.items[i].k === "row") {
+      assert.strictEqual(memoized.items[i].v, fresh.items[i].v, `item ${i} v matches`);
+      assert.strictEqual(memoized.items[i].sg, fresh.items[i].sg, `item ${i} sg matches`);
+    }
+  }
+  assert.strictEqual(memoized.maxLineLen, fresh.maxLineLen, "maxLineLen matches");
+}
+
 /* --- keyboard focus contract -----------------------------------------------
    The keydown handler needs a document, so the two decisions it kept getting
    wrong live in web/keys.js and are asserted here. A helper with the right
