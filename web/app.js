@@ -450,30 +450,53 @@ async function loadCommits(select = true) {
   if (select && commits.length) selectCommit(commits[0].sha);
 }
 
-async function selectCommit(sha) {
+function selectCommit(sha) {
   S.selCommit = sha;
   commitVL.refresh();
+  bannerDismissed = null; // an explicit commit click un-dismisses the banner
   setScope({ type: "commit", sha }, null, true);
-  try {
-    // A failed side-panel fetch must not take down the page — leave whatever
-    // commit detail was already showing.
-    const { meta } = await api("commit", { sha }, { cached: true });
-    renderCommitDetail(meta);
-  } catch {}
 }
 
-function renderCommitDetail(m) {
-  if (!m) return;
-  $("#commitDetail").innerHTML = `
-    <div class="subject">${esc(m.subject)}</div>
-    <div class="dl">
-      <div class="dt">Author</div><div>${esc(m.author)} <span class="mono" style="color:var(--muted)">${esc(m.email)}</span></div>
-      <div class="dt">Date</div><div>${new Date(m.date).toLocaleString()}</div>
-      ${m.refs.length ? `<div class="dt">Refs</div><div>${m.refs.map((r) => `<span class="reftag">${esc(r)}</span>`).join("")}</div>` : ""}
-      <div class="dt">SHA</div><div class="mono">${m.sha}</div>
-      <div class="dt">Parents</div><div class="mono">${m.parents.map((p) => p.slice(0, 8)).join("  ") || "—"}</div>
+/*
+ * The commit's story rides above its diff instead of living in a tab. The old
+ * Commit tab was a passive pane only `selectCommit` ever filled, which left it
+ * empty on arrival and stale after any scope change — two ways of lying about
+ * what is on screen. The banner is derived from the scope: it exists exactly
+ * while the scope is one commit, so neither failure state can be expressed.
+ */
+let bannerDismissed = null; // sha the reader closed; the next explicit commit click resets it
+async function updateCommitBanner(scope) {
+  const el = $("#commitBanner");
+  if (scope.type !== "commit" || bannerDismissed === scope.sha) {
+    el.hidden = true;
+    return;
+  }
+  let meta;
+  try {
+    ({ meta } = await api("commit", { sha: scope.sha }, { cached: true }));
+  } catch {
+    el.hidden = true; // no metadata is a missing banner, not a broken one
+    return;
+  }
+  // The scope may have moved on while the fetch was in flight.
+  if (!meta || S.scope.type !== "commit" || S.scope.sha !== scope.sha) return;
+  el.innerHTML = `
+    <div class="cb-head">
+      <span class="cb-subject">${esc(meta.subject)}</span>
+      <button class="x" data-cbclose title="Dismiss">✕</button>
     </div>
-    ${m.body ? `<pre>${esc(m.body)}</pre>` : ""}`;
+    <div class="cb-meta">
+      <span>${esc(meta.author)}</span>
+      <span>${new Date(meta.date).toLocaleString()}</span>
+      <span class="mono">${esc(meta.short)}</span>
+      ${meta.refs.map((r) => `<span class="reftag">${esc(r)}</span>`).join("")}
+    </div>
+    ${meta.body ? `<pre class="cb-body">${esc(meta.body)}</pre>` : ""}`;
+  el.hidden = false;
+  el.querySelector("[data-cbclose]").onclick = () => {
+    bannerDismissed = scope.sha;
+    el.hidden = true;
+  };
 }
 
 function collapseCommits(collapsed) {
@@ -499,6 +522,7 @@ async function setScope(scope, name, keepCommits) {
   S.pendingFocusFile = null; // …and any armed promotion was waiting on the old stream too
   S.treePaths = null;
   $("#scopeChip").textContent = Scope.label(scope);
+  updateCommitBanner(scope); // not awaited: metadata fills in when it arrives
   if (!keepCommits) collapseCommits(scope.type !== "commit");
   sidebar();
   let files;
@@ -939,9 +963,6 @@ function rebuildStream() {
 function scrollToFile(path) {
   S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
   if (S.tab === "tree") return selectTreeFile(path);
-  // #commitDetail overlays the diff pane on the Commit tab, so a file click or
-  // j/k landing there would scroll a pane the reader cannot see.
-  if (S.tab === "commit") setTab("changes");
   if (!isSelected(path)) return setSelected(path, true), scrollToFile(path);
   /* Nothing else guarantees the stream matches this tab: the File Tree branch
      of buildItems() clears the segments, setTab rebuilds nothing, and at boot
@@ -1657,8 +1678,6 @@ function setTab(tab) {
   // 12k paths are only navigable as a tree; a 50-file review is a list.
   setListMode(tab !== "tree");
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
-  $("#commitDetail").hidden = tab !== "commit";
-  $("#diffTools").style.visibility = tab === "commit" ? "hidden" : "visible";
   $("#chkViewed").parentElement.hidden = tab === "tree";
   if (tab === "tree" && !S.treePaths) {
     loadTree();
