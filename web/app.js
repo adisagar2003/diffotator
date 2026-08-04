@@ -588,6 +588,21 @@ function renderFileTree() {
   box.innerHTML = out.join("") || `<div class="empty-state">No changes</div>`;
 }
 
+/** Move the sidebar's 'sel' highlight without rebuilding the pane. Scrolling
+    the stream crosses a file boundary every few ticks; a full renderFileTree
+    per crossing rebuilds up to 800 rows to change one class. */
+function updateTreeSel(path) {
+  const box = $("#fileTree");
+  const cur = box.querySelector(".tnode.sel");
+  if (cur && cur.dataset.file === path) return;
+  if (cur) cur.classList.remove("sel");
+  const next = box.querySelector(`.tnode[data-file="${CSS.escape(path)}"]`);
+  if (next) {
+    next.classList.add("sel");
+    next.scrollIntoView({ block: "nearest" });
+  }
+}
+
 // Viewed state is per scope: the same path in the worktree and in a commit are
 // different things to have read.
 const viewKey = (path) => scopeId() + "|" + path;
@@ -627,6 +642,19 @@ function setCollapsed(path, on) {
   // to be told; `rebuildStream` is the one path that keeps all of that in step.
   rebuildStream();
   if (on) refocusOutOf(path);
+  saveDraft();
+}
+
+/** Fold or unfold every selected file in one rebuild — per-file setCollapsed
+    would rebuild the stream once per file. */
+function collapseAll(on) {
+  for (const f of S.files) {
+    if (!isSelected(f.path)) continue;
+    const k = viewKey(f.path);
+    on ? S.collapsed.add(k) : S.collapsed.delete(k);
+  }
+  rebuildStream();
+  if (on && S.focus) refocusOutOf(S.focus.file);
   saveDraft();
 }
 
@@ -748,6 +776,8 @@ $("#fileTree").addEventListener("click", (e) => {
 function selAllClick(e) {
   if (e.target.closest("[data-selall]")) return selectAll(true), true;
   if (e.target.closest("[data-selnone]")) return selectAll(false), true;
+  if (e.target.closest("[data-foldall]")) return collapseAll(true), true;
+  if (e.target.closest("[data-unfoldall]")) return collapseAll(false), true;
   return false;
 }
 document.querySelector(".filter-row").addEventListener("click", selAllClick);
@@ -862,7 +892,7 @@ function scrollToFile(path) {
   // with the row that was just clicked instead of naming the file above it.
   diffVL.scrollToIndex(seg.start, false, 0);
   pinAfterScroll(path);
-  renderFileTree();
+  updateTreeSel(path);
   syncViewedToggle();
   updateStickyHeader(true);
 }
@@ -1295,7 +1325,7 @@ function updateStickyHeader(force) {
   $("#chkFull").checked = !!(S.perFile.get(seg.file) || {}).full;
   if (S.selFile !== seg.file) {
     S.selFile = seg.file;
-    renderFileTree(); // move the 'sel' highlight
+    updateTreeSel(seg.file); // incremental: scroll crossings must not rebuild the pane
     syncViewedToggle();
   }
   const f = S.files.find((x) => x.path === seg.file) || {};
