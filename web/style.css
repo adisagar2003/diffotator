@@ -388,6 +388,8 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .tl-sha{font-family:var(--mono);font-size:11px;color:var(--muted);flex:0 0 auto}
 .tl-sub{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .tl-row.all .tl-sub{font-weight:600}
+.tl-row.dim{opacity:.4}
+.tl-tag{margin-left:auto;flex:0 0 auto;font-size:9px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:0 4px}
 
 /* ---------- comments panel ---------- */
 #commentsPanel{width:320px;flex:0 0 auto;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column}

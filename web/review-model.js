@@ -526,11 +526,26 @@
    * The commit timeline panel's whole contract, held where node can test it.
    * `timelineRows` is what the panel shows; `timelineScope` is what a
    * selection means. t = { base, head, sel, mode } with mode "upto" | "only".
+   *
+   * `commits` arrives newest-first (git log order — the order every git tool
+   * trains the eye for). `included` is the affordance that makes a selection's
+   * semantics visible: rows outside the current diff render dimmed, so "up to
+   * here" reads as "this commit and everything below it" at a glance.
    */
-  function timelineRows(commits, sel) {
-    const rows = [{ kind: "all", sel: !sel }];
-    for (const c of commits || [])
-      rows.push({ kind: "commit", sha: c.sha, short: c.short, subject: c.subject, sel: sel === c.sha });
+  function timelineRows(commits, sel, mode) {
+    const rows = [{ kind: "all", sel: !sel, included: true }];
+    const list = commits || [];
+    const si = sel ? list.findIndex((c) => c.sha === sel) : -1;
+    list.forEach((c, i) =>
+      rows.push({
+        kind: "commit",
+        sha: c.sha,
+        short: c.short,
+        subject: c.subject,
+        sel: sel === c.sha,
+        included: !sel || si < 0 || (mode === "only" ? c.sha === sel : i >= si),
+      })
+    );
     return rows;
   }
 

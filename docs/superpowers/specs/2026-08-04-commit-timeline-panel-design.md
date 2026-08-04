@@ -13,9 +13,13 @@ range; clicking one narrows the diff to that point in the branch's story.
   scope that *has* an intra-review timeline. Worktree and single-commit
   scopes don't show it.
 - Lists only the commits inside the range (`base..head`), fetched through
-  the existing `/api/commits?rev=` endpoint. Oldest first — the branch
-  reads as a story, top to bottom. Row: short sha + subject; the selected
-  commit is highlighted.
+  the existing `/api/commits?rev=` endpoint. Newest first — the order every
+  git tool trains the eye for; "newest"/"oldest" tags orient the ends, and
+  commits outside the current selection's diff render dimmed, so "up to
+  here" reads as "this commit and everything below it" at a glance.
+  (Was oldest-first in v1; live use showed that with "All branch changes"
+  on top, readers assumed accumulation grew upward.) Row: short sha +
+  subject; the selected commit is highlighted.
 - The existing top commit pane is untouched: it stays the "explore any
   commit" browser. This panel is the review-scoped timeline. They do
   different jobs.

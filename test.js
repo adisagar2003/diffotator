@@ -53,12 +53,18 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
     { sha: "c2".repeat(20), short: "c2c2c2c", subject: "second" },
     { sha: "c1".repeat(20), short: "c1c1c1c", subject: "first" },
   ];
-  const rows = RM.timelineRows(commits, null);
+  const rows = RM.timelineRows(commits, null, "upto");
   assert.strictEqual(rows[0].kind, "all");
   assert.ok(rows[0].sel, "no selection = the full branch row is active");
   assert.strictEqual(rows.length, 3);
-  const sel = RM.timelineRows(commits, commits[1].sha);
+  assert.ok(rows.every((r) => r.included), "no selection dims nothing");
+  // commits arrive newest-first; selecting the older one in "up to here" mode
+  // includes it and dims the newer row above it.
+  const sel = RM.timelineRows(commits, commits[1].sha, "upto");
   assert.ok(!sel[0].sel && sel[2].sel, "selection moves off the all-row onto the commit");
+  assert.ok(!sel[1].included && sel[2].included, "up-to-here dims commits newer than the selection");
+  const only = RM.timelineRows(commits, commits[0].sha, "only");
+  assert.ok(only[1].included && !only[2].included, "this-commit includes the selection alone");
   assert.deepStrictEqual(
     RM.timelineScope({ base: "origin/main", head: "HEAD", sel: null, mode: "only" }),
     { type: "range", base: "origin/main", head: "HEAD" },

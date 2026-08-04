@@ -558,7 +558,7 @@ async function syncTimeline(scope) {
      good. But two fetches for the *same* range must still be ordered, or the
      older response overwrites the newer list; the token settles both. */
   if (!S.tl || S.tl.req !== req) return;
-  S.tl.commits = commits.slice().reverse(); // git speaks newest-first; a story reads oldest-first
+  S.tl.commits = commits; // newest-first, the order every git tool trains the eye for
   renderTimeline();
 }
 
@@ -570,12 +570,15 @@ function renderTimeline() {
   $("#tlSplit").hidden = !on || closed; // a collapsed header bar has nothing to resize
   $("#tlCaret").textContent = closed ? "▸" : "▾";
   if (!on) return;
-  const rows = RM.timelineRows(S.tl.commits, S.tl.sel).map((r) =>
-    r.kind === "all"
-      ? `<div class="tl-row all${r.sel ? " sel" : ""}" data-tlall><span class="tl-sub">All branch changes</span></div>`
-      : `<div class="tl-row${r.sel ? " sel" : ""}" data-tlsha="${r.sha}">
-           <span class="tl-sha">${esc(r.short)}</span><span class="tl-sub" title="${esc(r.subject)}">${esc(r.subject)}</span></div>`
-  );
+  const rows = RM.timelineRows(S.tl.commits, S.tl.sel, S.tl.mode).map((r, i, arr) => {
+    if (r.kind === "all")
+      return `<div class="tl-row all${r.sel ? " sel" : ""}" data-tlall><span class="tl-sub">All branch changes</span></div>`;
+    // Newest/oldest tags orient the list; dimming shows which commits the
+    // current selection's diff actually contains.
+    const tag = arr.length > 2 && i === 1 ? "newest" : arr.length > 2 && i === arr.length - 1 ? "oldest" : "";
+    return `<div class="tl-row${r.sel ? " sel" : ""}${r.included ? "" : " dim"}" data-tlsha="${r.sha}">
+         <span class="tl-sha">${esc(r.short)}</span><span class="tl-sub" title="${esc(r.subject)}">${esc(r.subject)}</span>${tag ? `<span class="tl-tag">${tag}</span>` : ""}</div>`;
+  });
   $("#timeline").innerHTML = rows.join("");
   $("#tlCount").textContent = S.tl.commits ? String(S.tl.commits.length) : "";
   $("#segUpto").classList.toggle("active", S.tl.mode === "upto");
