@@ -48,3 +48,18 @@ First impressions on feasibility:
   "one blocking session per review" into a long-lived review hub with an
   inbox. Ideas 1 and 3 probably want to be designed together (multi-source
   review queue: worktrees, branches, pings).
+
+## 4. Submodule support (2026-08-04)
+
+Review changes inside git submodules, not just the pointer bump.
+
+First impressions on feasibility:
+- Today a dirty/bumped submodule shows up as a one-line "Subproject commit
+  <sha>" diff — technically true, useless for review.
+- Each submodule is a full repo, so the existing machinery works *inside*
+  it unchanged; the gap is discovery and navigation: list submodules
+  (`git submodule status` / `.gitmodules`), treat a changed one as an
+  expandable entry that opens its own file list/diffs under its own root.
+- Shares the "per-request root" plumbing with idea 1 (multi-worktree):
+  both need routes to accept a root other than the one fixed at startup.
+  Worth designing that plumbing once for both.
