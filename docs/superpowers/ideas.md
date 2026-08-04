@@ -33,3 +33,18 @@ First impressions on feasibility:
 - Smallest useful shape: a "compare…" affordance on branch rows (pick base,
   pick head — or right-click/two-click selection). Good candidate for the
   UX phase shortlist, low risk.
+
+## 3. Agents ping their branch — review inbox in the UI (2026-08-04)
+
+When an agent finishes work on a branch, it could "ping" diffotator so the
+UI notifies the reviewer which branch to check. Proper UX unclear — parked.
+
+First impressions on feasibility:
+- Mechanically simple: a `POST /api/ping {branch, note}` endpoint plus a
+  badge/toast in the UI (the client could poll, or the server could push).
+  An agent pings with one `curl`; a Stop-hook variant could ping instead of
+  opening a browser.
+- The real design question is shared with idea 1: it turns diffotator from
+  "one blocking session per review" into a long-lived review hub with an
+  inbox. Ideas 1 and 3 probably want to be designed together (multi-source
+  review queue: worktrees, branches, pings).
