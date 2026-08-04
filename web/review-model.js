@@ -246,25 +246,47 @@
             : "Empty file.";
           items.push({ k: "note", f: f.path, text });
         } else {
-          const one = buildItems({
-            rows: st.rows,
-            fullRows: st.fullRows,
-            annotations,
-            file: f.path,
-            expanded: st.expanded || new Set(),
-            full: !!st.full,
-            view,
-          });
-          // Rows carry their segment's view so a pure-add file stays unified
-          // while its neighbor renders split — exactly the per-file rule today.
-          for (const it of one.items) {
-            if (it.k === "row") {
-              it.v = one.effView;
-              it.sg = one.singleGutter;
+          /* Every arrival used to rebuild EVERY loaded file's rows through
+             buildItems, so filling a large stream did quadratic work. The
+             body — rows/folds/comment cards plus maxLineLen — is memoized on
+             the perFile state object the caller already owns; only the
+             fileHeader above (idx/count/collapsed/viewed) is cheap and
+             position-dependent, so it stays built fresh every call. The cache
+             key covers everything the body depends on besides rows/fullRows
+             identity, which is checked separately since a fresh diff arrival
+             replaces `st` wholesale rather than mutating rows in place. */
+          const annsForFile = annotations.filter((a) => a.file === f.path);
+          const key =
+            view + "|" + !!st.full + "|" + [...(st.expanded || [])].sort().join(",") + "|" + JSON.stringify(annsForFile);
+          let memo = st.stream;
+          if (!memo || st.streamKey !== key || memo.rows !== st.rows || memo.fullRows !== st.fullRows) {
+            const one = buildItems({
+              rows: st.rows,
+              fullRows: st.fullRows,
+              annotations,
+              file: f.path,
+              expanded: st.expanded || new Set(),
+              full: !!st.full,
+              view,
+            });
+            // Rows carry their segment's view so a pure-add file stays unified
+            // while its neighbor renders split — exactly the per-file rule
+            // today. Stamped once, here, before the body is cached: nothing
+            // downstream may mutate a cached item afterward.
+            const body = [];
+            for (const it of one.items) {
+              if (it.k === "row") {
+                it.v = one.effView;
+                it.sg = one.singleGutter;
+              }
+              body.push(it);
             }
-            items.push(it);
+            memo = { items: body, maxLineLen: one.maxLineLen, rows: st.rows, fullRows: st.fullRows };
+            st.stream = memo;
+            st.streamKey = key;
           }
-          if (one.maxLineLen > maxLineLen) maxLineLen = one.maxLineLen;
+          for (const it of memo.items) items.push(it);
+          if (memo.maxLineLen > maxLineLen) maxLineLen = memo.maxLineLen;
         }
       }
       segments.push({ file: f.path, start, end: items.length });
