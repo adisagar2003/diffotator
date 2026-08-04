@@ -879,6 +879,7 @@ function rebuildStream() {
 
 /** Sidebar click / j/k target: make sure it's in the stream, then go there. */
 function scrollToFile(path) {
+  S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
   if (S.tab === "tree") return selectTreeFile(path);
   // #commitDetail overlays the diff pane on the Commit tab, so a file click or
   // j/k landing there would scroll a pane the reader cannot see.
@@ -1430,6 +1431,7 @@ $("#diffHeader").addEventListener("click", (e) => {
 });
 
 function jumpChange(dir) {
+  S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
   // Rows are no longer uniform (headers, cards, notes), so scrollTop/ROW is not
   // an item index any more — the list knows which item the viewport starts on.
   /* Start from where the reader thinks they are: a pinned file's own header,
