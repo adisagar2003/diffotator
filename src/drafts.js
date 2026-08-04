@@ -73,8 +73,26 @@ function loadPrefs() {
   return readJson(path.join(dataDir(), "prefs.json")) || {};
 }
 
-function savePrefs(prefs) {
-  return writeJson(path.join(dataDir(), "prefs.json"), prefs && typeof prefs === "object" ? prefs : {});
+/**
+ * Key-level merge, never a whole-file overwrite: one server per repo is the
+ * normal workflow, so two live sessions each hold a boot-time snapshot —
+ * last-write-wins on the file would silently revert the other session's
+ * settings. The patch arrives from an unauthenticated localhost POST, so
+ * keys and values are validated and the file stays small: primitives only,
+ * `null` deletes a key, anything else is dropped.
+ */
+const PREF_KEY = /^[\w.-]{1,64}$/;
+function savePrefs(patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return false;
+  const merged = loadPrefs();
+  for (const [k, v] of Object.entries(patch)) {
+    if (!PREF_KEY.test(k)) continue;
+    const t = typeof v;
+    if (v === null) delete merged[k];
+    else if (t === "number" || t === "boolean" || (t === "string" && v.length <= 200)) merged[k] = v;
+  }
+  if (Object.keys(merged).length > 200) return false; // a runaway writer must not grow the boot payload
+  return writeJson(path.join(dataDir(), "prefs.json"), merged);
 }
 
 /**

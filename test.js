@@ -653,12 +653,28 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   D.saveDraft(root, {}); // nothing left → draft file removed
   assert.strictEqual(D.loadDraft(root), null, "empty draft is cleared");
 
-  // --- prefs: global UI state survives a restart, corruption degrades to {} --
+  // --- prefs: key-level merge, validated, corruption degrades to {} ---------
   assert.deepStrictEqual(D.loadPrefs(), {}, "no prefs yet is an empty object, not a crash");
   D.savePrefs({ "panel.sidebar": 260, "panel.sidebarOff": true });
   assert.deepStrictEqual(D.loadPrefs(), { "panel.sidebar": 260, "panel.sidebarOff": true }, "prefs round-trip");
-  D.savePrefs("nonsense"); // a bad payload must not poison the file
-  assert.deepStrictEqual(D.loadPrefs(), {}, "non-object prefs are stored as empty");
+  // Two sessions each patch their own key; neither snapshot clobbers the other.
+  D.savePrefs({ "panel.timelineCollapsed": true });
+  assert.deepStrictEqual(
+    D.loadPrefs(),
+    { "panel.sidebar": 260, "panel.sidebarOff": true, "panel.timelineCollapsed": true },
+    "a patch merges instead of overwriting"
+  );
+  D.savePrefs({ "panel.sidebarOff": null });
+  assert.ok(!("panel.sidebarOff" in D.loadPrefs()), "null deletes a key");
+  // The POST body is untrusted: junk shapes and values are dropped, not stored.
+  assert.strictEqual(D.savePrefs("nonsense"), false, "non-object patch is rejected");
+  assert.strictEqual(D.savePrefs([1, 2, 3]), false, "array patch is rejected");
+  D.savePrefs({ "bad key!": 1, nested: { a: 1 }, big: "x".repeat(300), ok: 7 });
+  assert.deepStrictEqual(
+    D.loadPrefs(),
+    { "panel.sidebar": 260, "panel.timelineCollapsed": true, ok: 7 },
+    "invalid keys and non-primitive/oversized values are dropped"
+  );
   fs.writeFileSync(path.join(dir, "prefs.json"), "{corrupt");
   assert.deepStrictEqual(D.loadPrefs(), {}, "corrupt prefs file degrades to defaults");
   delete process.env.DIFFOTATOR_DATA_DIR;

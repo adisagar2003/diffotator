@@ -470,6 +470,11 @@ function selectCommit(sha) {
 let bannerDismissed = null; // sha the reader closed; the next explicit commit click resets it
 async function updateCommitBanner(scope) {
   const el = $("#commitInfo");
+  // The card is a resizable container like any pane; its splitter goes with it.
+  const show = (on) => {
+    el.hidden = !on;
+    $("#ciSplit").hidden = !on;
+  };
   /* What the card describes: a commit scope names itself; an "up to here"
      range from the timeline reads as the story through its newest commit, so
      that commit's details are the useful header. A plain range names nothing. */
@@ -479,14 +484,14 @@ async function updateCommitBanner(scope) {
     : null;
   if (!sha) S.commitMeta = null;
   if (!sha || bannerDismissed === sha) {
-    el.hidden = true;
+    show(false);
     return;
   }
   let meta;
   try {
     ({ meta } = await api("commit", { sha }, { cached: true }));
   } catch {
-    el.hidden = true; // no metadata is a missing banner, not a broken one
+    show(false); // no metadata is a missing banner, not a broken one
     return;
   }
   // The target may have moved on while the fetch was in flight.
@@ -508,10 +513,10 @@ async function updateCommitBanner(scope) {
       ${meta.refs.map((r) => `<span class="reftag">${esc(r)}</span>`).join("")}
     </div>
     ${meta.body ? `<pre class="cb-body">${esc(meta.body)}</pre>` : ""}`;
-  el.hidden = false;
+  show(true);
   el.querySelector("[data-cbclose]").onclick = () => {
     bannerDismissed = sha;
-    el.hidden = true;
+    show(false);
   };
 }
 
@@ -525,6 +530,7 @@ async function updateCommitBanner(scope) {
  * through the ordinary setScope. The panel is a scope switcher, not new diff
  * machinery; RM.timelineRows / RM.timelineScope hold its contract.
  */
+let tlSeq = 0;
 async function syncTimeline(scope) {
   if (scope.type !== "range") {
     S.tl = null;
@@ -532,7 +538,8 @@ async function syncTimeline(scope) {
     return;
   }
   const head = scope.head || "HEAD";
-  S.tl = { base: scope.base, head, commits: null, sel: null, mode: (S.tl && S.tl.mode) || "upto" };
+  const req = ++tlSeq; // orders same-range refetches; timeline clicks never bump it
+  S.tl = { base: scope.base, head, commits: null, sel: null, mode: (S.tl && S.tl.mode) || "upto", req };
   renderTimeline();
   let commits;
   try {
@@ -545,11 +552,12 @@ async function syncTimeline(scope) {
   } catch {
     return;
   }
-  /* Guard on the range, not on scopeSeq: navigating *within* the timeline bumps
-     the seq without re-anchoring, and a click racing this fetch must not throw
-     the commits away — that left the panel empty for good. Only a different
-     anchor (new range, or the panel gone) invalidates the result. */
-  if (!S.tl || S.tl.base !== scope.base || S.tl.head !== head) return;
+  /* Guard on our own request token, not on scopeSeq: navigating *within* the
+     timeline bumps the scope seq without re-anchoring, and a click racing this
+     fetch must not throw the commits away — that left the panel empty for
+     good. But two fetches for the *same* range must still be ordered, or the
+     older response overwrites the newer list; the token settles both. */
+  if (!S.tl || S.tl.req !== req) return;
   S.tl.commits = commits.slice().reverse(); // git speaks newest-first; a story reads oldest-first
   renderTimeline();
 }
@@ -1885,6 +1893,8 @@ function setFullOnCurrent(on) {
  */
 const Prefs = {
   data: {},
+  pending: {}, // only what THIS session changed — the server merges key-level,
+  // so a concurrent session's settings are never clobbered by our snapshot
   timer: null,
   async load() {
     try {
@@ -1899,12 +1909,15 @@ const Prefs = {
   set(key, value) {
     if (this.data[key] === value) return;
     this.data[key] = value;
+    this.pending[key] = value;
     clearTimeout(this.timer);
     this.timer = setTimeout(() => {
+      const patch = this.pending;
+      this.pending = {};
       fetch("/api/prefs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(this.data),
+        body: JSON.stringify(patch),
       }).catch(() => {}); // lost prefs must never take the review down
     }, 250);
   },
@@ -1912,7 +1925,7 @@ const Prefs = {
 
 /* Panel geometry restores by splitter target id; the splitter's mouseup is the
    single writer, so a size that was never touched is never stored. */
-const PANEL_DIMS = { sidebar: "width", leftPane: "width", commitPane: "height", timelinePane: "height" };
+const PANEL_DIMS = { sidebar: "width", leftPane: "width", commitPane: "height", timelinePane: "height", commitInfo: "height" };
 function applyPanelPrefs() {
   for (const [id, dim] of Object.entries(PANEL_DIMS)) {
     const v = +Prefs.get("panel." + id);

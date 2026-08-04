@@ -361,7 +361,7 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 /* ---------- commit info card (left pane, above the timeline) ---------- */
 .commit-info{
   flex:0 0 auto;padding:7px 10px;background:var(--elev);border-top:1px solid var(--border);
-  font-family:var(--ui);max-height:40%;overflow:auto
+  font-family:var(--ui);overflow:auto
 }
 .cb-head{display:flex;align-items:baseline;gap:8px}
 .cb-subject{font-size:12.5px;font-weight:600;flex:1;min-width:0}
