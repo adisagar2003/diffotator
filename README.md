@@ -49,6 +49,9 @@ diffotator --base origin/main    # review the branch against a base
 diffotator -C ../other-repo
 ```
 
+`--base` pins the base ref used for branch-vs-base — it reaches git, not just the
+auto-detected default shown in the sidebar.
+
 From Claude Code: `/diffotator`. The CLI blocks until you submit; whatever it prints
 on stdout becomes the agent's next input.
 
@@ -86,10 +89,15 @@ diffotator hook --uninstall     # remove it again
 
 ## The review loop
 
-`v` marks the current file viewed and jumps to the next unviewed one. The header
-tracks `12/56 viewed +2,341 −187`, viewed files dim with a ✓, and the diff header
-tells you where you are (`6 of 56`). That is the whole loop for a fifty-file agent
-run: `v v v`, stop when something looks wrong, `c` to comment, keep going.
+The Changes tab is one stream: every selected file's diff, stacked back to back
+in a single scroll, GitHub's Files-changed view rather than a picker plus a pane.
+Each file list row has a checkbox; uncheck one and it drops out of the stream,
+check `all`/`none` above the list to bulk in or out. `v` marks the current file
+viewed, collapses it in the stream, and jumps to the next unviewed one. The
+header tracks `12/56 viewed +2,341 −187`, viewed files dim with a ✓, and a sticky
+bar at the top of the pane tracks whichever file you're scrolled to (`6 of 56`).
+That is the whole loop for a fifty-file agent run: `v v v`, stop when something
+looks wrong, `c` to comment, keep going.
 
 Click any line number to comment. Labels follow Conventional Comments — `suggestion`,
 `nit`, `question`, `issue`, `praise`, `thought`, `note`, `todo`, `chore` — plus a
@@ -107,8 +115,9 @@ a fresh one. Closing with unsent comments asks first.
 
 Left sidebar: Local Changes, branch-vs-base (auto-detected), All Commits, worktrees,
 branches, tags, stashes, remotes. Top: commit graph with lanes, refs, author, sha, date.
-Bottom: **Changes** (changed files + diff), **Commit** (metadata + message), **File Tree**
-(every file in the repo at that revision, untracked ones included).
+Bottom: **Changes** (changed files + one continuous diff stream), **Commit**
+(metadata + message), **File Tree** (every file in the repo at that revision,
+untracked ones included).
 
 <img src="site/shot-commits.jpg" width="900" alt="All Commits scope: commit graph with branch lanes and refs, and the diff of the selected merge commit below it">
 

@@ -58,8 +58,9 @@ async function repoRoot(cwd) {
 }
 
 /** Best guess at the branch this work forked from, for a "branch vs base" review scope. */
-async function detectBase(root, head) {
+async function detectBase(root, head, forced) {
   const candidates = [];
+  if (forced) candidates.push(forced); // --base: first in line, same validation as the rest
   const upstream = (
     await probe(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
   ).trim();
@@ -81,27 +82,27 @@ async function detectBase(root, head) {
   return null;
 }
 
-async function overview(root) {
+async function overview(root, { base } = {}) {
   const [nameRaw, branchRaw, headRaw] = await Promise.all([
     probe(root, ["rev-parse", "--show-toplevel"]),
     probe(root, ["rev-parse", "--abbrev-ref", "HEAD"]),
     probe(root, ["rev-parse", "HEAD"]), // absent in a repo with no commits yet
   ]);
   const branch = branchRaw.trim();
-  const [worktrees, branches, remoteBranches, tags, stashes, base] = await Promise.all([
+  const [worktrees, branches, remoteBranches, tags, stashes, detectedBase] = await Promise.all([
     listWorktrees(root),
     listRefs(root, "refs/heads"),
     listRefs(root, "refs/remotes"),
     listRefs(root, "refs/tags"),
     listStashes(root),
-    detectBase(root, branch),
+    detectBase(root, branch, base),
   ]);
   return {
     name: path.basename(nameRaw.trim() || root),
     root,
     branch,
     head: headRaw.trim(),
-    base,
+    base: detectedBase,
     worktrees,
     branches,
     remoteBranches,

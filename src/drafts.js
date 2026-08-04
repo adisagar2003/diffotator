@@ -44,16 +44,16 @@ function writeJson(file, value) {
   }
 }
 
-/** @returns {{ann: object[], viewed: string[], root: string}|null} */
+/** @returns {{ann: object[], viewed: string[], desel: string[], collapsed: string[]}|null} */
 function loadDraft(root) {
   const d = readJson(fileFor(root, "drafts"));
   if (!d || d.root !== root) return null;
-  return { ann: d.ann || [], viewed: d.viewed || [] };
+  return { ann: d.ann || [], viewed: d.viewed || [], desel: d.desel || [], collapsed: d.collapsed || [] };
 }
 
-function saveDraft(root, { ann = [], viewed = [] } = {}) {
-  if (!ann.length && !viewed.length) return clearDraft(root);
-  return writeJson(fileFor(root, "drafts"), { root, ann, viewed, at: Date.now() });
+function saveDraft(root, { ann = [], viewed = [], desel = [], collapsed = [] } = {}) {
+  if (!ann.length && !viewed.length && !desel.length && !collapsed.length) return clearDraft(root);
+  return writeJson(fileFor(root, "drafts"), { root, ann, viewed, desel, collapsed, at: Date.now() });
 }
 
 function clearDraft(root) {
