@@ -800,6 +800,51 @@ $("#fileFilter").addEventListener("input", (e) => {
 // ---------------------------------------------------------------------------
 // diff loading + rendering
 // ---------------------------------------------------------------------------
+/** Fetch one file's diff and slot it into the stream. Shared by the stream
+    filler and any jump that must wait for a specific file. Returns after the
+    store+rebuild; a scope change mid-flight discards the arrival. */
+async function loadFileDiff(path) {
+  const sid = scopeId();
+  const params = { ...scopeParams(), file: path };
+  try {
+    /* No `full: "1"` here. The diff already arrives with full context, so
+       "Full file" only has to stop folding — asking for the whole file as
+       well would render every line while the checkbox read unchecked, and
+       would make the empty/mode-only notes unreachable. Only the File Tree
+       tab, which has no diff, fetches whole files. */
+    const r = await api("diff", params, { cached: true });
+    if (scopeId() !== sid) return; // scope changed mid-flight
+    const d = r.diff || {};
+    S.perFile.set(path, {
+      loaded: true,
+      rows: d.rows || null,
+      fullRows: null,
+      expanded: new Set(),
+      full: false,
+      binary: d.binary,
+      tooBig: d.tooBig,
+      error: d.error,
+      empty: d.empty,
+      mode: d.mode,
+    });
+  } catch {
+    if (scopeId() !== sid) return; // scope changed mid-flight
+    // A rejected fetch would otherwise cache its own rejection forever —
+    // every future read of this url replays the same failure. Evict it so
+    // the next fetchStream (a fresh scope, a retry) gets a clean attempt.
+    cache.delete(apiUrl("diff", params));
+    S.perFile.set(path, {
+      loaded: true,
+      rows: null,
+      fullRows: null,
+      expanded: new Set(),
+      full: false,
+      error: "could not load diff",
+    });
+  }
+  rebuildStream();
+}
+
 let streamSeq = 0;
 /** Fetch every selected, not-yet-loaded file, a few at a time, in list order.
     Each arrival re-slots into the stream; the reader reads while it fills. */
@@ -809,46 +854,13 @@ async function fetchStream() {
   const CONCURRENCY = 4;
   let next = 0;
   const worker = async () => {
-    while (next < queue.length) {
+    // Selection/scope churn stops a worker from pulling further queue entries;
+    // an entry already in flight still stores its arrival — loadFileDiff's own
+    // scope guard covers that, and storing into a file the reader deselected
+    // mid-flight is harmless, since deselected files simply aren't rendered.
+    while (next < queue.length && seq === streamSeq) {
       const path = queue[next++];
-      const params = { ...scopeParams(), file: path };
-      try {
-        /* No `full: "1"` here. The diff already arrives with full context, so
-           "Full file" only has to stop folding — asking for the whole file as
-           well would render every line while the checkbox read unchecked, and
-           would make the empty/mode-only notes unreachable. Only the File Tree
-           tab, which has no diff, fetches whole files. */
-        const r = await api("diff", params, { cached: true });
-        if (seq !== streamSeq) return; // scope changed mid-flight
-        const d = r.diff || {};
-        S.perFile.set(path, {
-          loaded: true,
-          rows: d.rows || null,
-          fullRows: null,
-          expanded: new Set(),
-          full: false,
-          binary: d.binary,
-          tooBig: d.tooBig,
-          error: d.error,
-          empty: d.empty,
-          mode: d.mode,
-        });
-      } catch {
-        if (seq !== streamSeq) return; // scope changed mid-flight
-        // A rejected fetch would otherwise cache its own rejection forever —
-        // every future read of this url replays the same failure. Evict it so
-        // the next fetchStream (a fresh scope, a retry) gets a clean attempt.
-        cache.delete(apiUrl("diff", params));
-        S.perFile.set(path, {
-          loaded: true,
-          rows: null,
-          fullRows: null,
-          expanded: new Set(),
-          full: false,
-          error: "could not load diff",
-        });
-      }
-      rebuildStream();
+      await loadFileDiff(path);
     }
   };
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
@@ -1765,6 +1777,10 @@ $("#cpList").addEventListener("click", async (e) => {
     if (!S.files.some((f) => f.path === a.file)) setTab("tree");
     await scrollToFile(a.file);
   }
+  // The file's diff may not have arrived yet — early after boot/scope switch,
+  // or because scrollToFile just re-selected a file that was deselected. Wait
+  // for it rather than racing rowIndexFor against a loading placeholder.
+  if (!(S.perFile.get(a.file) || {}).loaded) await loadFileDiff(a.file);
   // Line numbers repeat across a stream, so the file has to be part of the match.
   const target = RM.rowIndexFor(S.items, a.side, a.line, a.file);
   if (target >= 0) diffVL.scrollToIndex(target, true);
