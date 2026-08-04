@@ -254,6 +254,23 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   const inB = RM.rowIndexFor(two.items, "new", 5, "b.js");
   assert.ok(inB > two.segments[1].start, "file-filtered lookup lands in b.js, not a.js");
 
+  /* focusStep in a stream: both files number their lines 1..10, so a cursor that
+     does not say which file it is in re-anchors on the first file that has the
+     line and walks a.js while the reader is looking at b.js. */
+  const rowsIn = (f) =>
+    two.items.map((it, i) => ({ it, i })).filter((x) => x.it.k === "row" && x.it.f === f && x.it.u.r && x.it.u.r.n != null);
+  const bRows = rowsIn("b.js");
+  assert.ok(bRows.length > 2, "b.js has rows to walk");
+  const from = { file: "b.js", side: "new", line: bRows[1].it.u.r.n };
+  const stepped = RM.focusStep(two.items, from, 1);
+  assert.strictEqual(stepped.index, bRows[2].i, "a file-aware cursor steps to the next row in b.js");
+  assert.strictEqual(two.items[stepped.index].f, "b.js", "…and never crosses back into a.js");
+  assert.strictEqual(
+    RM.focusStep(two.items, { ...from, file: undefined }, 1).index,
+    rowsIn("a.js")[2].i,
+    "a fileless focus keeps the old, file-blind behavior"
+  );
+
   // the v-loop walks only the selected stream
   const sel2 = ["a.js", "c.js"]; // b.js deselected
   assert.strictEqual(RM.nextUnviewed(sel2, "a.js", (p) => p === "a.js"), "c.js", "next unviewed skips deselected files");

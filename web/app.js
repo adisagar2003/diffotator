@@ -38,6 +38,13 @@ const S = {
   desel: new Set(), // scoped keys; empty = everything selected (the default)
   collapsed: new Set(), // scoped keys
   segments: [],
+  /* A file shorter than the viewport can never scroll its header to the top, so
+     the sticky bar would rename the file we just jumped to. `pinnedSeg` holds
+     that file until the reader scrolls for themselves; `pinExpectedTop` is where
+     the programmatic scroll left the pane, so the pin's own scroll event does
+     not release it. */
+  pinnedSeg: null,
+  pinExpectedTop: 0,
   treeDiff: null, // File Tree tab keeps the old one-file view
   treeRows: null,
   view: "split",
@@ -475,6 +482,8 @@ async function setScope(scope, name, keepCommits) {
   S.selFile = null;
   S.perFile = new Map();
   S.segments = [];
+  S.pinnedSeg = null; // a new scope can repeat a path; the old pin means nothing
+  S.focus = null; // …and the line cursor was pointing into the old stream
   S.treePaths = null;
   $("#scopeChip").textContent = Scope.label(scope);
   if (!keepCommits) collapseCommits(scope.type !== "commit");
@@ -640,10 +649,11 @@ function syncViewedToggle() {
   if (box) box.checked = !!(S.selFile && isViewed(S.selFile));
 }
 
-/** Next file that has not been marked viewed, wrapping from the current one. */
+/** Next file that has not been marked viewed, wrapping from the current one.
+    Only selected files count: the v-loop walks the stream that is on screen. */
 const nextUnviewed = () =>
   RM.nextUnviewed(
-    S.files.map((f) => f.path),
+    S.files.map((f) => f.path).filter(isSelected),
     S.selFile,
     isViewed
   );
@@ -795,9 +805,49 @@ function scrollToFile(path) {
   // pad 0: the file's own header lands at the top, so the sticky bar agrees
   // with the row that was just clicked instead of naming the file above it.
   diffVL.scrollToIndex(seg.start, false, 0);
+  pinAfterScroll(path);
   renderFileTree();
   syncViewedToggle();
   updateStickyHeader(true);
+}
+
+/**
+ * Every jump in this file can fall short of what it aimed at: the pane cannot
+ * scroll past total − clientHeight, so landing in the last file, when that file
+ * is shorter than the viewport, still leaves an earlier segment at the top.
+ * `topIndex()` would then name the wrong file, `updateStickyHeader` would
+ * overwrite the `S.selFile` the jump just set, and `v` would mark a file the
+ * reader never looked at. So whoever scrolled says which file they *meant*, and
+ * the header honors that pin until the reader scrolls for themselves — the
+ * scroll listener releases it the moment scrollTop moves off `pinExpectedTop`.
+ */
+function pinAfterScroll(file) {
+  const body = $("#diffBody");
+  S.pinExpectedTop = body.scrollTop; // read back: the browser clamps it
+  const seg = file ? S.segments.find((s) => s.file === file) : null;
+  /* Only when the pane is bottomed out — that is the one place a target cannot
+     climb any higher. Anywhere else a jump that did not reach the top simply
+     scrolled where it was asked to (centered, say), and the viewport is right. */
+  const atEnd = body.scrollTop >= body.scrollHeight - body.clientHeight - 1;
+  S.pinnedSeg = seg && atEnd && segmentAt(diffVL.topIndex()) !== seg ? file : null;
+}
+
+/** j/k: one file along, in the order the reader is actually looking at.
+    In the stream that is the segment list — unselected files are not on screen,
+    so walking `S.files` would step onto a file that has no header to land on.
+    Where the walk starts is the file under the sticky bar, not `S.selFile`:
+    they agree, but the viewport is the source of truth for "where am I". */
+function stepFile(dir) {
+  if (S.tab === "tree") {
+    const files = S.treePaths || [];
+    const next = files[files.indexOf(S.selFile) + dir];
+    if (next) selectTreeFile(next);
+    return;
+  }
+  const seg = currentSeg();
+  // No segment yet (nothing scrolled, nothing selected): `j` opens at the top.
+  const next = seg ? S.segments[S.segments.indexOf(seg) + dir] : dir > 0 ? S.segments[0] : null;
+  if (next) scrollToFile(next.file);
 }
 
 /** File Tree tab: unchanged behavior — fetch whole file, show alone. */
@@ -1133,10 +1183,19 @@ const segmentAt = (idx) => {
   return seg;
 };
 
-/** The pane header mirrors the file the viewport is inside — GitHub's sticky bar. */
+/** Which file the reader is on: the pin if one is set (see `scrollToFile`),
+    otherwise whatever the viewport starts inside. A pin dies with the segment it
+    names, so a rebuild that drops the file cannot leave the header stuck. */
+function currentSeg() {
+  const pinned = S.pinnedSeg ? S.segments.find((s) => s.file === S.pinnedSeg) : null;
+  if (S.pinnedSeg && !pinned) S.pinnedSeg = null;
+  return pinned || segmentAt(diffVL.topIndex());
+}
+
+/** The pane header mirrors the file the reader is on — GitHub's sticky bar. */
 function updateStickyHeader(force) {
   if (S.tab === "tree") return; // tree tab: renderTreeFile owns the header
-  const seg = segmentAt(diffVL.topIndex());
+  const seg = currentSeg();
   const head = $("#diffHeader");
   if (!seg) {
     head.innerHTML = "";
@@ -1145,6 +1204,8 @@ function updateStickyHeader(force) {
   }
   if (!force && head.dataset.file === seg.file) return; // cheap on every scroll tick
   head.dataset.file = seg.file;
+  // "Full file" is per file now, so the box describes whichever one is on top.
+  $("#chkFull").checked = !!(S.perFile.get(seg.file) || {}).full;
   if (S.selFile !== seg.file) {
     S.selFile = seg.file;
     renderFileTree(); // move the 'sel' highlight
@@ -1161,7 +1222,17 @@ function updateStickyHeader(force) {
 }
 /* Bound, not passed by reference: the listener would hand the scroll event in
    as `force` and rewrite the header on every tick. */
-$("#diffBody").addEventListener("scroll", () => updateStickyHeader(), { passive: true });
+$("#diffBody").addEventListener(
+  "scroll",
+  () => {
+    /* Only a scroll the reader caused releases the pin. The programmatic scroll
+       in `scrollToFile` recorded the position it left behind, so its own scroll
+       event lands on the same scrollTop and is ignored. */
+    if (S.pinnedSeg && $("#diffBody").scrollTop !== S.pinExpectedTop) S.pinnedSeg = null;
+    updateStickyHeader();
+  },
+  { passive: true }
+);
 
 $("#diffBody").addEventListener("click", (e) => {
   // Clicking a file's header folds that file away — the stream's own accordion.
@@ -1212,8 +1283,14 @@ $("#diffHeader").addEventListener("click", (e) => {
 function jumpChange(dir) {
   // Rows are no longer uniform (headers, cards, notes), so scrollTop/ROW is not
   // an item index any more — the list knows which item the viewport starts on.
-  const i = RM.findChange(S.items, diffVL.topIndex(), dir);
-  if (i >= 0) diffVL.scrollToIndex(i, true);
+  /* Start from where the reader thinks they are: a pinned file's own header,
+     not the segment the clamped scroll left at the top of the viewport. */
+  const pinned = S.pinnedSeg ? currentSeg() : null;
+  const from = pinned && pinned.file === S.pinnedSeg ? pinned.start : diffVL.topIndex();
+  const i = RM.findChange(S.items, from, dir);
+  if (i < 0) return;
+  diffVL.scrollToIndex(i, true);
+  pinAfterScroll(S.items[i] && S.items[i].f);
 }
 
 /* Windowing means only ~60 rows exist in the DOM, so the browser's own Find
@@ -1228,7 +1305,10 @@ function runSearch(q, jump = true) {
   // or an explicit next/prev jumps.
   S.search.idx = Math.min(at, Math.max(0, hits.length - 1));
   $("#searchCount").textContent = hits.length ? `${S.search.idx + 1}/${hits.length}` : q ? "no matches" : "";
-  if (jump && hits.length) diffVL.scrollToIndex(hits[0], true);
+  if (jump && hits.length) {
+    diffVL.scrollToIndex(hits[0], true);
+    pinAfterScroll(S.items[hits[0]] && S.items[hits[0]].f);
+  }
   diffVL.refresh();
 }
 function stepSearch(d) {
@@ -1236,7 +1316,9 @@ function stepSearch(d) {
   if (!h.length) return;
   S.search.idx = (S.search.idx + d + h.length) % h.length;
   $("#searchCount").textContent = `${S.search.idx + 1}/${h.length}`;
-  diffVL.scrollToIndex(h[S.search.idx], true);
+  const at = h[S.search.idx];
+  diffVL.scrollToIndex(at, true);
+  pinAfterScroll(S.items[at] && S.items[at].f);
   diffVL.refresh();
 }
 function openSearch() {
@@ -1267,8 +1349,11 @@ $("#searchClose").onclick = closeSearch;
 function moveFocus(dir) {
   const next = RM.focusStep(S.items, S.focus, dir);
   if (!next) return;
-  S.focus = { file: S.selFile, side: next.side, line: next.line };
+  /* The row's own file, not `S.selFile`: stepping off the end of one file lands
+     in the next one before the sticky header has caught up with the scroll. */
+  S.focus = { file: S.items[next.index].f, side: next.side, line: next.line };
   diffVL.scrollToIndex(next.index, false);
+  pinAfterScroll(S.focus.file); // the cursor's file owns the header, reachable or not
   diffVL.refresh();
 }
 
@@ -1278,17 +1363,23 @@ function commentOnFocus() {
     moveFocus(1);
     if (!S.focus) return;
   }
+  /* Match the file too, everywhere: the stream has one gutter per file per line
+     number, so line+side alone would comment on the first file that has them. */
   const find = () =>
     [...document.querySelectorAll(".gut[data-line]")].find(
-      (x) => +x.dataset.line === S.focus.line && x.dataset.side === S.focus.side
+      (x) =>
+        x.dataset.file === S.focus.file && +x.dataset.line === S.focus.line && x.dataset.side === S.focus.side
     );
   let g = find();
   if (!g) {
-    const i = RM.rowIndexFor(S.items, S.focus.side, S.focus.line);
-    if (i >= 0) diffVL.scrollToIndex(i, true);
+    const i = RM.rowIndexFor(S.items, S.focus.side, S.focus.line, S.focus.file);
+    if (i >= 0) {
+      diffVL.scrollToIndex(i, true);
+      pinAfterScroll(S.focus.file);
+    }
     g = find();
   }
-  if (g) openPopover(g, S.selFile, S.focus.side, S.focus.line);
+  if (g) openPopover(g, S.focus.file, S.focus.side, S.focus.line);
 }
 
 // ---------------------------------------------------------------------------
@@ -1334,14 +1425,29 @@ function toggleViewed(on) {
   if (!S.selFile) return;
   setViewed(S.selFile, on);
   if (!on) return;
+  setCollapsed(S.selFile, true); // GitHub's move: what you have read folds away
   const nx = nextUnviewed();
   if (nx) scrollToFile(nx);
 }
 
-$("#chkFull").onchange = (e) => {
-  S.full = e.target.checked;
-  renderDiff();
-};
+/* "Full file" belongs to a file, not to the pane: the stream shows many files
+   at once, so the box acts on whichever one the sticky header names and is
+   re-read from that file's state on every header update. */
+$("#chkFull").onchange = (e) => setFullOnCurrent(e.target.checked);
+function setFullOnCurrent(on) {
+  if (S.tab === "tree") {
+    $("#chkFull").checked = true; // the tree tab only ever shows whole files
+    return;
+  }
+  const st = S.selFile && S.perFile.get(S.selFile);
+  if (!st || !st.loaded) {
+    // Nothing has arrived to unfold yet — put the box back rather than lie.
+    $("#chkFull").checked = false;
+    return;
+  }
+  st.full = on;
+  rebuildStream();
+}
 
 // ---------------------------------------------------------------------------
 // annotations
@@ -1376,7 +1482,9 @@ function loadDraft() {
 
 function lineText(file, side, line) {
   const st = S.perFile.get(file);
-  const src = (st && (st.rows || st.fullRows)) || S.treeRows || [];
+  /* `S.treeRows` is only ever the File Tree tab's one open file — falling back
+     to it from the stream would quote another file's line back at the reader. */
+  const src = (st && (st.rows || st.fullRows)) || (S.tab === "tree" ? S.treeRows : null) || [];
   for (const r of src) {
     if (side === "new" && r.n === line && r.t !== "del") return r.s;
     if (side === "old" && r.o === line && r.t !== "add") return r.s;
@@ -1755,14 +1863,12 @@ document.addEventListener("keydown", (e) => {
   const key = Keys.shortcut(e);
   if (!key) return;
   e.preventDefault();
-  const files = S.tab === "tree" ? S.treePaths || [] : S.files.map((f) => f.path);
-  const i = files.indexOf(S.selFile);
   switch (key) {
     case "j":
-      if (i < files.length - 1) scrollToFile(files[i + 1]);
+      stepFile(1);
       break;
     case "k":
-      if (i > 0) scrollToFile(files[i - 1]);
+      stepFile(-1);
       break;
     case "n":
       jumpChange(1);
@@ -1774,8 +1880,7 @@ document.addEventListener("keydown", (e) => {
       setView(S.view === "split" ? "unified" : "split");
       break;
     case "f":
-      $("#chkFull").checked = !$("#chkFull").checked;
-      $("#chkFull").onchange({ target: $("#chkFull") });
+      setFullOnCurrent(!$("#chkFull").checked);
       break;
     case "v":
       toggleViewed(!isViewed(S.selFile));

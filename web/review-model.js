@@ -317,7 +317,12 @@
     return i >= 0 ? i : -1;
   }
 
-  /** Move the line cursor one row. Returns `{index, side, line}` or null. */
+  /**
+   * Move the line cursor one row. Returns `{index, side, line}` or null.
+   * `focus.file` is optional but matters in a stream: line numbers repeat across
+   * files, so a cursor that does not say which file it is in would re-anchor on
+   * the first file with that line number and step from there.
+   */
   function focusStep(items, focus, dir) {
     const rows = [];
     for (let i = 0; i < items.length; i++) if (items[i].k === "row") rows.push(i);
@@ -325,6 +330,7 @@
     let at = -1;
     if (focus) {
       at = rows.findIndex((i) => {
+        if (focus.file != null && items[i].f !== focus.file) return false;
         const l = rowLine(items[i]);
         return l && l.side === focus.side && l.line === focus.line;
       });
