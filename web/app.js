@@ -157,10 +157,19 @@ function vlist(container, rowH, count, renderRow, heightOf) {
       emptyHtml = `<div class="empty-state">${html}</div>`;
       paint(true);
     },
-    scrollToIndex(i, center) {
+    /** Which item the viewport starts inside — what the sticky header mirrors. */
+    topIndex: () => {
+      if (heightOf && (!offsets || offsets.length !== state.count() + 1)) reindex();
+      return Math.max(0, Math.min(state.count() - 1, indexAt(container.scrollTop)));
+    },
+    /* `pad` is how much of what came before stays visible. The default keeps a
+       few lines of context above the target; jumping to a file passes 0 so its
+       header lands at the very top and the sticky bar names the file you
+       clicked rather than the tail of the one above it. */
+    scrollToIndex(i, center, pad = 60) {
       if (heightOf && (!offsets || offsets.length !== state.count() + 1)) reindex();
       const y = topOf(i);
-      container.scrollTop = Math.max(0, center ? y - container.clientHeight / 2 : y - 60);
+      container.scrollTop = Math.max(0, center ? y - container.clientHeight / 2 : y - pad);
       paint(true);
     },
   };
@@ -603,8 +612,9 @@ const isCollapsed = (path) => S.collapsed.has(viewKey(path));
 function setCollapsed(path, on) {
   const k = viewKey(path);
   on ? S.collapsed.add(k) : S.collapsed.delete(k);
-  buildItems();
-  diffVL.refresh();
+  // Folding a file away moves every segment after it, so the sticky header has
+  // to be told; `rebuildStream` is the one path that keeps all of that in step.
+  rebuildStream();
   saveDraft();
 }
 
@@ -659,8 +669,15 @@ function fileRow(path, m, depth, label) {
   } else {
     name = esc(label);
   }
+  /* Only changed files can be in the stream, so only they get a checkbox — the
+     File Tree tab lists the whole repo and has nothing to select. */
+  const box =
+    S.tab !== "tree" && m
+      ? `<span class="selbox${isSelected(path) ? " on" : ""}" data-sel="${esc(path)}">${isSelected(path) ? "☑" : "☐"}</span>`
+      : "";
   return `<div class="tnode${sel}${seen}" data-file="${esc(path)}" style="padding-left:${6 + depth * 12}px" title="${esc(path)}">
     <span class="caret">${seen ? "✓" : ""}</span>
+    ${box}
     ${code ? `<span class="st ${code}">${code === "q" ? "?" : code}</span>` : "📄"}
     <span class="nm">${name}</span>
     ${n ? `<span class="cmt">🗨${n}</span>` : ""}
@@ -680,9 +697,23 @@ $("#fileTree").addEventListener("click", (e) => {
     renderFileTree();
     return;
   }
+  // The checkbox sits inside the file row, so it has to be answered first.
+  const sb = e.target.closest(".selbox[data-sel]");
+  if (sb) {
+    setSelected(sb.dataset.sel, !isSelected(sb.dataset.sel));
+    return;
+  }
   const f = e.target.closest(".tnode[data-file]");
   if (f) scrollToFile(f.dataset.file);
 });
+
+/** all / none, wherever it is drawn: the file pane's header, or an empty stream. */
+function selAllClick(e) {
+  if (e.target.closest("[data-selall]")) return selectAll(true), true;
+  if (e.target.closest("[data-selnone]")) return selectAll(false), true;
+  return false;
+}
+document.querySelector(".filter-row").addEventListener("click", selAllClick);
 
 function setListMode(on) {
   S.listMode = on;
@@ -738,11 +769,14 @@ async function fetchStream() {
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 }
 
-/** Rebuild items from current per-file state and repaint, keeping scroll. */
+/** Rebuild items from current per-file state and repaint, keeping scroll.
+    `refresh`, not `paint`: paint keeps a stale empty state on screen and only
+    reindexes when the item count changes. `refresh` never touches scrollTop. */
 function rebuildStream() {
   buildItems();
-  diffVL.paint(true);
+  diffVL.refresh();
   renderProgress();
+  updateStickyHeader(true); // a file arriving can move both the top file and the count
 }
 
 /** Sidebar click / j/k target: make sure it's in the stream, then go there. */
@@ -758,9 +792,12 @@ function scrollToFile(path) {
   const seg = S.segments.find((s) => s.file === path);
   if (!seg) return;
   S.selFile = path;
-  diffVL.scrollToIndex(seg.start, false);
+  // pad 0: the file's own header lands at the top, so the sticky bar agrees
+  // with the row that was just clicked instead of naming the file above it.
+  diffVL.scrollToIndex(seg.start, false, 0);
   renderFileTree();
   syncViewedToggle();
+  updateStickyHeader(true);
 }
 
 /** File Tree tab: unchanged behavior — fetch whole file, show alone. */
@@ -881,33 +918,66 @@ const ROW_HTML = {
     </div>`;
   },
 
+  /* Fold ids repeat across the stream ("f12" exists in every file), so the
+     marker has to name the file it belongs to or a click would expand the
+     wrong one. */
   fold(item, top) {
-    return `<div class="fold" style="top:${top}px" data-fold="${item.id}">
+    return `<div class="fold" style="top:${top}px" data-fold="${item.id}" data-file="${esc(item.f)}">
       <span>⌄</span> ${item.count} unmodified line${item.count === 1 ? "" : "s"} — click to expand</div>`;
   },
 
+  /** The bar between two files: name, counts, position, collapse toggle. */
+  fileHeader(item, top) {
+    const s = item.stats || {};
+    return `<div class="fsh${item.collapsed ? " closed" : ""}${item.viewed ? " seen" : ""}"
+        style="top:${top}px" data-fhead="${esc(item.f)}" title="${esc(item.f)}">
+      <span class="caret">${item.collapsed ? "▸" : "▾"}</span>
+      <span class="fp">${esc(item.f)}</span>
+      ${item.viewed ? `<span class="vchip">✓ viewed</span>` : ""}
+      ${s.oldPath ? `<span class="old">← ${esc(s.oldPath)}</span>` : ""}
+      <span class="grow"></span>
+      <span class="pos">${item.idx + 1} of ${item.count}</span>
+      <span class="plus">+${s.additions ?? 0}</span><span class="minus">−${s.deletions ?? 0}</span>
+    </div>`;
+  },
+
+  /* A file whose diff is still in flight, and a file that has no diff to show
+     (binary, too big, mode-only). Both are one fixed-height row, so the
+     prefix-sum index is exact before the fetch lands and after it does. */
+  loading(item, top) {
+    return `<div class="fold" style="top:${top}px">Loading ${esc(item.f)}…</div>`;
+  },
+
+  note(item, top) {
+    return `<div class="fold note" style="top:${top}px">${esc(item.text)}</div>`;
+  },
+
+  /* Every read below comes off the item, not off `S`: one stream mixes files,
+     and a segment carries its own effective view, gutter shape and path. */
   row(item, top, index) {
     const u = item.u;
-    const lang = extOf(S.selFile);
+    const lang = extOf(item.f);
     const hit = S.search.hitSet && S.search.hitSet.has(index)
       ? S.search.hits[S.search.idx] === index ? " hit cur" : " hit"
       : "";
     const idx = S.annIdx;
     const foc = S.focus;
 
+    const inFocusFile = !!foc && foc.file === item.f;
+
     const gutHtml = (side, num, cls) => {
       if (num == null) return `<div class="gut"></div>`;
-      const n = idx.get(annKey(S.selFile, side, num));
-      return `<div class="gut ${cls}${n ? " hasc" : ""}" data-side="${side}" data-line="${num}">
+      const n = idx.get(annKey(item.f, side, num));
+      return `<div class="gut ${cls}${n ? " hasc" : ""}" data-file="${esc(item.f)}" data-side="${side}" data-line="${num}">
         <span class="plus">+</span>${num}${n ? `<span class="cmtbadge">${n}</span>` : ""}</div>`;
     };
 
-    if (S.effView === "unified") {
+    if ((item.v || "unified") === "unified") {
       const r = u.uni;
       if (r.t === "gap") return `<div class="fold" style="top:${top}px">⋯</div>`;
       const cls = r.t === "add" ? "add" : r.t === "del" ? "del" : "";
-      const focused = foc && foc.line === (r.n ?? r.o) && foc.file === S.selFile ? " focus" : "";
-      const gutters = S.singleGutter
+      const focused = inFocusFile && foc.line === (r.n ?? r.o) ? " focus" : "";
+      const gutters = item.sg
         ? gutHtml("new", r.n ?? r.o ?? null, cls)
         : gutHtml("old", r.o ?? null, cls) + gutHtml("new", r.n ?? null, cls);
       return `<div class="drow${focused}${hit}" style="top:${top}px">
@@ -928,8 +998,8 @@ const ROW_HTML = {
     }
     const lcls = u.t === "chg" ? "del" : "";
     const rcls = u.t === "chg" ? "add" : "";
-    const focL = foc && foc.side === "old" && L && foc.line === L.o ? " focus" : "";
-    const focR = foc && foc.side === "new" && R && foc.line === R.n ? " focus" : "";
+    const focL = inFocusFile && foc.side === "old" && L && foc.line === L.o ? " focus" : "";
+    const focR = inFocusFile && foc.side === "new" && R && foc.line === R.n ? " focus" : "";
     return `<div class="drow${focL || focR}${hit}" style="top:${top}px">
       <div class="side">
         ${gutHtml("old", L ? L.o ?? null : null, lcls)}
@@ -954,17 +1024,23 @@ const diffVL = vlist(
   itemHeight
 );
 
+/**
+ * The Changes tab is one stream: every selected file, back to back, each behind
+ * its own header row. There is no "the file" for the pane to describe any more,
+ * so the pane header is not written here — `updateStickyHeader` mirrors whatever
+ * the viewport is inside, on every scroll tick. The File Tree tab still shows
+ * one whole file and still owns its own header, below.
+ */
 function renderDiff() {
   S.annIdx = annIndex();
-  const f = S.files.find((x) => x.path === S.selFile);
-  const path = S.selFile || "";
-  const parts = path.split("/");
-  const name = parts.pop();
   const head = $("#diffHeader");
+  if (S.tab === "tree") return renderTreeFile(head);
 
-  if (!path) {
+  if (!S.files.length) {
     head.innerHTML = "";
+    head.dataset.file = "";
     S.items = [];
+    S.segments = [];
     const base = S.ov.base && S.ov.base.ref;
     diffVL.setEmpty(
       S.scope.type === "worktree"
@@ -976,24 +1052,43 @@ function renderDiff() {
     return;
   }
 
-  /* A stream has no single file's metadata: binary, too-big and mode-only files
-     get their own note row inside it. Only the File Tree tab, which still shows
-     one whole file, has meta to speak for the pane. */
-  const meta = (S.tab === "tree" ? S.treeDiff : null) || {};
+  buildItems();
+  if (!S.items.length) {
+    // Every file unchecked. That is a choice, not a failure — offer the way back.
+    diffVL.setEmpty(`Nothing selected. <b data-selall>Select all</b> to fill the stream.`);
+  } else if (S.search.q) {
+    S.search.hitSet = null;
+    runSearch(S.search.q, false);
+  } else {
+    diffVL.refresh();
+  }
+  /* Not only on scroll: at boot nothing has scrolled yet, and after a rebuild
+     the position counter and the file at the top can both have moved. */
+  updateStickyHeader(true);
+}
 
+/** File Tree tab: one whole file, its own header, its own empty states. */
+function renderTreeFile(head) {
+  const path = S.selFile || "";
+  head.dataset.file = ""; // the sticky header owns this on the other tab
+  if (!path) {
+    head.innerHTML = "";
+    S.items = [];
+    diffVL.setEmpty("Pick a file to read it.");
+    return;
+  }
+  const f = S.files.find((x) => x.path === path);
+  const parts = path.split("/");
+  const name = parts.pop();
+  const meta = S.treeDiff || {};
+
+  // No position counter here: progress is about the review, not about browsing.
   head.innerHTML = `
     <span class="fp" title="${esc(path)}">${esc(parts.join("/"))}${parts.length ? "/" : ""}<b>${esc(name)}</b></span>
     ${f ? `<span class="plus">+${f.additions}</span><span class="minus">−${f.deletions}</span>` : ""}
-    ${meta.mode ? `<span class="mode" title="file mode changed">${meta.mode.old} → ${meta.mode.new}</span>` : ""}
+    ${meta.mode ? `<span class="mode" title="file mode changed">${esc(meta.mode.old)} → ${esc(meta.mode.new)}</span>` : ""}
     ${f && f.oldPath ? `<span style="color:var(--muted)">← ${esc(f.oldPath)}</span>` : ""}
     <span class="grow"></span>
-    ${(() => {
-      // Position is about progress through the review, so it only means
-      // something in the changed-files list — not while browsing the repo.
-      if (S.tab === "tree") return "";
-      const i = S.files.findIndex((x) => x.path === path);
-      return i >= 0 ? `<span class="pos">${i + 1} of ${S.files.length}</span>` : "";
-    })()}
     <div class="nav"><button data-nav="prev" title="Previous change (p)">▲</button><button data-nav="next" title="Next change (n)">▼</button></div>`;
 
   const problem =
@@ -1007,7 +1102,7 @@ function renderDiff() {
       : meta.empty && !(S.treeRows && S.treeRows.length)
       ? // A chmod has no content to show, and "Empty file." would be a lie.
         meta.mode
-        ? `Mode changed — <b>${meta.mode.old} → ${meta.mode.new}</b>.` +
+        ? `Mode changed — <b>${esc(meta.mode.old)} → ${esc(meta.mode.new)}</b>.` +
           `<br><span class="hint">No content changed.</span>`
         : f && f.status === "deleted"
         ? "File deleted — it was empty."
@@ -1028,13 +1123,58 @@ function renderDiff() {
   diffVL.refresh();
 }
 
+/** Which file's segment the viewport starts inside. */
+const segmentAt = (idx) => {
+  let seg = null;
+  for (const s of S.segments) {
+    if (s.start <= idx) seg = s;
+    else break;
+  }
+  return seg;
+};
+
+/** The pane header mirrors the file the viewport is inside — GitHub's sticky bar. */
+function updateStickyHeader(force) {
+  if (S.tab === "tree") return; // tree tab: renderTreeFile owns the header
+  const seg = segmentAt(diffVL.topIndex());
+  const head = $("#diffHeader");
+  if (!seg) {
+    head.innerHTML = "";
+    head.dataset.file = ""; // or the next scroll back into this file would find a match and skip
+    return;
+  }
+  if (!force && head.dataset.file === seg.file) return; // cheap on every scroll tick
+  head.dataset.file = seg.file;
+  if (S.selFile !== seg.file) {
+    S.selFile = seg.file;
+    renderFileTree(); // move the 'sel' highlight
+    syncViewedToggle();
+  }
+  const f = S.files.find((x) => x.path === seg.file) || {};
+  const i = S.segments.indexOf(seg);
+  head.innerHTML = `
+    <span class="fp" title="${esc(seg.file)}"><b>${esc(seg.file)}</b></span>
+    <span class="plus">+${f.additions ?? 0}</span><span class="minus">−${f.deletions ?? 0}</span>
+    <span class="grow"></span>
+    <span class="pos">${i + 1} of ${S.segments.length}</span>
+    <div class="nav"><button data-nav="prev" title="Previous change (p)">▲</button><button data-nav="next" title="Next change (n)">▼</button></div>`;
+}
+/* Bound, not passed by reference: the listener would hand the scroll event in
+   as `force` and rewrite the header on every tick. */
+$("#diffBody").addEventListener("scroll", () => updateStickyHeader(), { passive: true });
+
 $("#diffBody").addEventListener("click", (e) => {
+  // Clicking a file's header folds that file away — the stream's own accordion.
+  const fh = e.target.closest(".fsh[data-fhead]");
+  if (fh) {
+    const p = fh.dataset.fhead;
+    setCollapsed(p, !isCollapsed(p));
+    return;
+  }
   const fold = e.target.closest(".fold[data-fold]");
   if (fold) {
-    /* Fold state belongs to a file now, and fold ids repeat across the stream,
-       so the marker has to say whose it is. Task 5 renders that; until then the
-       current file is the only one that can be expanded. */
-    const st = S.perFile.get(fold.dataset.file || S.selFile);
+    // Fold state belongs to a file; the marker says which one it came from.
+    const st = S.perFile.get(fold.dataset.file);
     if (!st) return;
     st.expanded.add(fold.dataset.fold);
     buildItems();
@@ -1054,7 +1194,14 @@ $("#diffBody").addEventListener("click", (e) => {
     return;
   }
   const gut = e.target.closest(".gut[data-line]");
-  if (gut) openPopover(gut, S.selFile, gut.dataset.side, +gut.dataset.line);
+  if (gut) {
+    // The gutter names its own file: line numbers repeat down the stream.
+    openPopover(gut, gut.dataset.file, gut.dataset.side, +gut.dataset.line);
+    return;
+  }
+  // `setEmpty` writes its HTML inside #diffBody, so the empty stream's own
+  // "Select all" lands here rather than on the file pane's copy.
+  selAllClick(e);
 });
 
 $("#diffHeader").addEventListener("click", (e) => {
@@ -1063,8 +1210,9 @@ $("#diffHeader").addEventListener("click", (e) => {
 });
 
 function jumpChange(dir) {
-  const cur = Math.floor($("#diffBody").scrollTop / ROW);
-  const i = RM.findChange(S.items, cur, dir);
+  // Rows are no longer uniform (headers, cards, notes), so scrollTop/ROW is not
+  // an item index any more — the list knows which item the viewport starts on.
+  const i = RM.findChange(S.items, diffVL.topIndex(), dir);
   if (i >= 0) diffVL.scrollToIndex(i, true);
 }
 

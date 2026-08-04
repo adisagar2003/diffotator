@@ -177,6 +177,13 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .tnode .stat .a{color:#4fae63}.tnode .stat .d{color:#d1596a}
 .tnode .cmt{font-size:10px;color:var(--accent)}
 .tdir{color:var(--text-dim)}
+/* In or out of the stream. Unchecked files still list; they just stop rendering. */
+.selbox{cursor:pointer;opacity:.8;flex:0 0 auto;font-size:11px;line-height:1;width:12px}
+.selbox:hover{opacity:1}
+.selbox.on{color:var(--accent)}
+.selall{display:flex;align-items:center;gap:2px;flex:0 0 auto;font-size:11px;color:var(--muted)}
+.selall button{border:0;background:transparent;color:var(--text-dim);cursor:pointer;font-size:11px;padding:0 3px}
+.selall button:hover{color:var(--accent);text-decoration:underline}
 
 /* ---------- diff ---------- */
 .diff-header{
@@ -257,6 +264,28 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
   border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft);font-family:var(--ui)
 }
 .fold:hover{background:var(--elev);color:var(--text)}
+/* A file's bar inside the stream. Height is exactly RM.GEOM.fileHeader (32) —
+   box-sizing:border-box means the two borders live inside it — or the windowed
+   list's prefix-sum index would drift a pixel per file. */
+.fsh{
+  position:absolute;left:0;right:0;height:32px;display:flex;align-items:center;gap:8px;
+  padding:0 10px;background:var(--panel);border-top:1px solid var(--border);
+  border-bottom:1px solid var(--border);font-family:var(--ui);font-size:12px;
+  color:var(--text-dim);white-space:nowrap;overflow:hidden;cursor:pointer
+}
+.fsh:hover{background:var(--elev)}
+.fsh .caret{width:11px;flex:0 0 auto;color:var(--muted);font-size:9px}
+.fsh .fp{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
+.fsh.seen .fp{opacity:.6}
+.fsh.closed{color:var(--muted)}
+.fsh .vchip{font-size:10px;padding:0 6px;border-radius:9px;background:#173a24;border:1px solid #2b6b3e;color:#7fbf90}
+.fsh .old{color:var(--muted);overflow:hidden;text-overflow:ellipsis}
+.fsh .pos{font-size:11px;color:var(--muted)}
+.fsh .plus{color:#4fae63;font-family:var(--mono);font-size:11.5px}
+.fsh .minus{color:#d1596a;font-family:var(--mono);font-size:11.5px}
+/* Not a diff and not a fold — a sentence about why a file has nothing to show. */
+.fold.note{font-style:italic;cursor:default}
+.fold.note:hover{background:#1f2226;color:var(--muted)}
 .cmtcard{
   position:absolute;left:0;right:0;background:#20242c;border-top:1px solid var(--accent-dim);
   border-bottom:1px solid var(--accent-dim);border-left:3px solid var(--accent);
@@ -280,6 +309,8 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .empty-state{padding:44px 30px;text-align:center;color:var(--text-dim);font-family:var(--ui);line-height:1.75;font-size:13px}
 .empty-state .hint{color:var(--muted);font-size:12px}
 .empty-state b{color:var(--text)}
+/* The empty stream offers its own way out, so it has to read as clickable. */
+.empty-state b[data-selall]{color:var(--accent);cursor:pointer;text-decoration:underline}
 .diff-header .pos{font-size:11px;color:var(--muted);margin-right:8px}
 .btn:disabled{opacity:.45;cursor:not-allowed}
 
