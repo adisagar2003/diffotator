@@ -202,9 +202,11 @@ function parseLog(out) {
  * the file it names. Validate it here rather than at each caller: this is
  * where a string stops being data and becomes a git argument.
  */
-async function log(root, { limit = 200, skip = 0, rev = null, file = null, all = false } = {}) {
+async function log(root, { limit = 200, skip = 0, rev = null, file = null, all = false, firstParent = false } = {}) {
   const args = ["log", `--format=${LOG_FORMAT}`, `--max-count=${limit}`, `--skip=${skip}`];
   if (all) args.push("--all");
+  // The branch's own story: merges are one entry, not everything they brought in.
+  if (firstParent) args.push("--first-parent");
   if (rev) args.push(Scope.ref(rev, "rev"));
   if (file) args.push("--", file);
   // A repo with no commits legitimately has no log; anything else is a fault.

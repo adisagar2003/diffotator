@@ -91,6 +91,7 @@ const ROUTES = {
       rev: q.get("rev") || null,
       file: q.get("file") || null,
       all: q.get("all") === "1",
+      firstParent: q.get("firstParent") === "1",
     }),
   }),
 

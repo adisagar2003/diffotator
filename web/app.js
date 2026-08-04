@@ -527,7 +527,9 @@ async function syncTimeline(scope) {
   try {
     // A failed side-panel fetch must not take down the review — the panel just
     // stays empty and the full-range row still describes what is on screen.
-    ({ commits } = await api("commits", { rev: `${scope.base}..${head}`, limit: 500 }, { cached: true }));
+    // first-parent: the branch's own story — a merge is one row, not the
+    // spilled contents of whatever it brought in.
+    ({ commits } = await api("commits", { rev: `${scope.base}..${head}`, limit: 500, firstParent: 1 }, { cached: true }));
   } catch {
     return;
   }

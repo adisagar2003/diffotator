@@ -763,6 +763,17 @@ async function awkwardShapes() {
   assert.strictEqual(renamed.additions, 1, "renamed file keeps its line stats");
   assert.strictEqual(renamed.deletions, 1);
 
+  // The timeline wants the branch's own story: first-parent keeps the merge as
+  // one entry instead of spilling the merged branch's commits into the list.
+  const full = await G.log(root, { rev: `${ROOT}..HEAD` });
+  const story = await G.log(root, { rev: `${ROOT}..HEAD`, firstParent: true });
+  assert.strictEqual(full.length, 3, "plain range walk includes the merged-in commit");
+  assert.deepStrictEqual(
+    story.map((c) => c.subject),
+    ["merge feature", "main side"],
+    "first-parent walk is the branch's own commits"
+  );
+
   const crlf = await G.fileContent(root, { type: "commit", sha: ROOT }, "crlf.txt");
   assert.deepStrictEqual(crlf.rows.map((r) => r.s), ["one", "two"], "CRLF and phantom line stripped");
 
