@@ -73,8 +73,8 @@ function serveStatic(p, res) {
  * most endpoints have no scope to validate), `body()`, `submit(result)`.
  */
 const ROUTES = {
-  "GET /api/overview": async ({ root, title }) => ({
-    ...(await G.overview(root)),
+  "GET /api/overview": async ({ root, title, base }) => ({
+    ...(await G.overview(root, { base })),
     title,
     draft: D.loadDraft(root),
   }),
@@ -136,11 +136,12 @@ const ROUTES = {
  * @param {object} opts
  * @param {string} opts.root   repo root
  * @param {string} [opts.title] header title for the session
+ * @param {string} [opts.base] forced base ref for the branch-vs-base scope
  * @returns {http.Server} with an extra `submitted` promise that resolves to
  *   `{decision, output}` when the reviewer submits. The caller owns teardown
  *   and process exit — this module knows nothing about either.
  */
-function createServer({ root, title }) {
+function createServer({ root, title, base }) {
   let onSubmit;
   const submitted = new Promise((resolve) => (onSubmit = resolve));
 
@@ -157,6 +158,7 @@ function createServer({ root, title }) {
           await route({
             root,
             title,
+            base,
             q,
             body: () => readBody(req),
             submit: onSubmit,

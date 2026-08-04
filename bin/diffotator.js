@@ -69,8 +69,8 @@ const PAINT_MS = 400;
  * and the teardown — the HTTP module only reports that a decision arrived.
  * @returns {Promise<{decision: string, output: string}>}
  */
-function serveReview(root, { open = true, port = 0, title } = {}) {
-  const server = createServer({ root, title });
+function serveReview(root, { open = true, port = 0, title, base } = {}) {
+  const server = createServer({ root, title, base });
   return new Promise((resolve) => {
     const finish = (result) => {
       setTimeout(() => server.close(() => resolve(result)), PAINT_MS);
@@ -153,6 +153,7 @@ async function main() {
     open: opts.open,
     port: opts.port || 0,
     title: opts.title,
+    base: opts.base,
   });
   if (output) process.stdout.write(output.endsWith("\n") ? output : output + "\n");
   process.exit(0);

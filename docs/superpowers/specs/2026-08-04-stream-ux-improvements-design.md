@@ -29,16 +29,18 @@ Cursor and viewport must never disagree after `v`.
 
 Today: `v` on the last unviewed file ends the loop silently.
 
-Required behavior: when every **selected** file is viewed, render a finish
-state in the diff pane, **after the last collapsed header** (the collapsed
-headers stay visible and clickable above it):
+Required behavior: the finish state is **derived, never stored** — it exists
+exactly while every **selected** file is both **viewed and folded** (the state
+the `v` loop leaves behind), rendered after the last collapsed header (the
+collapsed headers stay visible and clickable above it):
 
 - Headline: `All N files viewed`.
 - Comment count line: `M comments drafted` (omit when M = 0).
 - Nudge: if M > 0 → a **Send feedback** button + hint `⌘⏎`; if M = 0 → an
   **Approve** button. Buttons trigger the same paths as the header buttons.
-- Dismissal: un-collapsing any file, un-marking any file as viewed, or
-  changing the selection removes the finish state. No modal, no auto-send.
+- Dismissal follows from the derivation: un-folding a file (resuming
+  reading), un-marking any file as viewed, or a selection change that breaks
+  the condition removes the finish state. No modal, no auto-send.
 
 ## Issue 2 — Sticky header becomes a mini file-header
 

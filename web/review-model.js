@@ -21,11 +21,13 @@
    */
   const GEOM = {
     row: 20, // .drow height
+    fileHeader: 32, // .file-header height in the stream
     cardHead: 26,
     cardLine: 17,
     cardPad: 14,
     cardMaxLines: 4, // comment bodies are line-clamped to this
     context: 3, // unmodified lines kept either side of a change
+    allViewed: 96, // .avc height in style.css — border-box, must match exactly
   };
 
   // --- annotation indexing -------------------------------------------------
@@ -57,7 +59,9 @@
   }
 
   function itemHeight(item, charsPerLine) {
-    if (!item || item.k !== "comment") return GEOM.row;
+    if (item && item.k === "fileHeader") return GEOM.fileHeader;
+    if (item && item.k === "allviewed") return GEOM.allViewed;
+    if (!item || item.k !== "comment") return GEOM.row; // rows, folds, loading, note
     return GEOM.cardHead + GEOM.cardPad + commentLines(item.a, charsPerLine) * GEOM.cardLine;
   }
 
@@ -163,7 +167,7 @@
 
     const items = [];
     const pushRow = (u, i) => {
-      items.push({ k: "row", u, i });
+      items.push({ k: "row", u, i, f: file });
       if (!byLine.size) return;
       // A comment belongs under the line it is about, so it reads like a thread.
       const seen = new Set();
@@ -176,7 +180,7 @@
         for (const a of byLine.get(side + ":" + n) || []) {
           if (seen.has(a.id)) continue;
           seen.add(a.id);
-          items.push({ k: "comment", a });
+          items.push({ k: "comment", a, f: file });
         }
       }
     };
@@ -194,7 +198,7 @@
       if (expanded.has(id)) {
         for (let j = start; j < i; j++) pushRow(units[j], j);
       } else {
-        items.push({ k: "fold", id, count: i - start, from: start, to: i });
+        items.push({ k: "fold", id, count: i - start, from: start, to: i, f: file });
       }
     }
 
@@ -205,11 +209,107 @@
     return { items, effView, singleGutter, maxLineLen };
   }
 
+  /**
+   * The whole review as one flat list: every selected file's items back to
+   * back, each behind a fileHeader row. Heights stay derived — header, loading
+   * and note rows are fixed — so the windowed list's prefix-sum index is exact
+   * before, during and after the per-file diffs arrive.
+   */
+  function buildStream({ files, selected, collapsed, perFile, annotations = [], view = "split", viewedSet = new Set() }) {
+    const items = [];
+    const segments = [];
+    let maxLineLen = 0;
+    let idx = 0;
+    const shown = files.filter((f) => selected.has(f.path));
+    for (const f of shown) {
+      const start = items.length;
+      const st = (perFile && perFile.get(f.path)) || {};
+      items.push({
+        k: "fileHeader",
+        f: f.path,
+        stats: f,
+        collapsed: collapsed.has(f.path),
+        viewed: viewedSet.has(f.path),
+        idx: idx++,
+        count: shown.length,
+      });
+      if (!collapsed.has(f.path)) {
+        if (!st.loaded) {
+          items.push({ k: "loading", f: f.path });
+        } else if (st.error || st.binary || st.tooBig || (st.empty && !(st.fullRows && st.fullRows.length))) {
+          const text = st.error
+            ? "Could not read this file."
+            : st.binary
+            ? "Binary file — nothing to diff."
+            : st.tooBig
+            ? "Diff too large to render — review it in your editor."
+            : st.mode
+            ? `Mode changed ${st.mode.old} → ${st.mode.new} — no content changed.`
+            : "Empty file.";
+          items.push({ k: "note", f: f.path, text });
+        } else {
+          /* Every arrival used to rebuild EVERY loaded file's rows through
+             buildItems, so filling a large stream did quadratic work. The
+             body — rows/folds/comment cards plus maxLineLen — is memoized on
+             the perFile state object the caller already owns; only the
+             fileHeader above (idx/count/collapsed/viewed) is cheap and
+             position-dependent, so it stays built fresh every call. The cache
+             key covers everything the body depends on besides rows/fullRows
+             identity, which is checked separately since a fresh diff arrival
+             replaces `st` wholesale rather than mutating rows in place. */
+          const annsForFile = annotations.filter((a) => a.file === f.path);
+          const key =
+            view + "|" + !!st.full + "|" + [...(st.expanded || [])].sort().join(",") + "|" + JSON.stringify(annsForFile);
+          let memo = st.stream;
+          if (!memo || st.streamKey !== key || memo.rows !== st.rows || memo.fullRows !== st.fullRows) {
+            const one = buildItems({
+              rows: st.rows,
+              fullRows: st.fullRows,
+              annotations,
+              file: f.path,
+              expanded: st.expanded || new Set(),
+              full: !!st.full,
+              view,
+            });
+            // Rows carry their segment's view so a pure-add file stays unified
+            // while its neighbor renders split — exactly the per-file rule
+            // today. Stamped once, here, before the body is cached: nothing
+            // downstream may mutate a cached item afterward.
+            const body = [];
+            for (const it of one.items) {
+              if (it.k === "row") {
+                it.v = one.effView;
+                it.sg = one.singleGutter;
+              }
+              body.push(it);
+            }
+            memo = { items: body, maxLineLen: one.maxLineLen, rows: st.rows, fullRows: st.fullRows };
+            st.stream = memo;
+            st.streamKey = key;
+          }
+          for (const it of memo.items) items.push(it);
+          if (memo.maxLineLen > maxLineLen) maxLineLen = memo.maxLineLen;
+        }
+      }
+      segments.push({ file: f.path, start, end: items.length });
+    }
+    // The review's finish line: every selected file viewed AND folded — the
+    // state the v loop leaves behind. Derived, never stored: an item, not
+    // app-side chrome, so it scrolls, windowing prices it, and any rebuild
+    // that breaks the condition (un-view, un-fold, re-select) removes it.
+    if (shown.length && shown.every((f) => viewedSet.has(f.path) && collapsed.has(f.path))) {
+      items.push({ k: "allviewed", n: shown.length, comments: annotations.length });
+    }
+    return { items, segments, maxLineLen };
+  }
+
   // --- navigation over the item list ---------------------------------------
 
   const isChangeRow = (it) => !!it && it.k === "row" && it.u.t !== "ctx" && it.u.t !== "gap";
 
-  /** Which line a row stands for. The new side wins; a pure deletion has only the old. */
+  /** Which line a row stands for, as `{side, line}` or null. The new side wins;
+      a pure deletion has only the old. Exported because the app has to re-anchor
+      the line cursor on a row it picked out of the stream itself. */
   const rowLine = (it) =>
     it && it.k === "row"
       ? it.u.r && it.u.r.n != null
@@ -219,11 +319,16 @@
         : null
       : null;
 
-  /** Index of the row showing `line` on `side`, or -1. */
-  const rowIndexFor = (items, side, line) =>
+  /**
+   * Index of the row showing `line` on `side`, or -1. `file` is optional; when
+   * given, only rows for that file match — needed because line numbers repeat
+   * across files in a stream.
+   */
+  const rowIndexFor = (items, side, line, file) =>
     items.findIndex(
       (it) =>
         it.k === "row" &&
+        (file == null || it.f === file) &&
         ((side === "new" && it.u.r && it.u.r.n === line) || (side === "old" && it.u.l && it.u.l.o === line))
     );
 
@@ -245,17 +350,32 @@
     return i >= 0 ? i : -1;
   }
 
-  /** Move the line cursor one row. Returns `{index, side, line}` or null. */
-  function focusStep(items, focus, dir) {
+  /**
+   * Move the line cursor one row. Returns `{index, side, line}` or null.
+   * `focus.file` is optional but matters in a stream: line numbers repeat across
+   * files, so a cursor that does not say which file it is in would re-anchor on
+   * the first file with that line number and step from there.
+   *
+   * `anchorIndex` (item index, optional) stands in for a real focus when there
+   * isn't one yet: the cursor is treated as resting just *before* that row, so
+   * stepping forward lands on it instead of on row 0 of the whole stream. Used
+   * when a pending-focus file (armed by `v` on a still-fetching file) names
+   * where the reader actually is.
+   */
+  function focusStep(items, focus, dir, anchorIndex) {
     const rows = [];
     for (let i = 0; i < items.length; i++) if (items[i].k === "row") rows.push(i);
     if (!rows.length) return null;
     let at = -1;
     if (focus) {
       at = rows.findIndex((i) => {
+        if (focus.file != null && items[i].f !== focus.file) return false;
         const l = rowLine(items[i]);
         return l && l.side === focus.side && l.line === focus.line;
       });
+    } else if (anchorIndex != null && anchorIndex >= 0) {
+      const ai = rows.indexOf(anchorIndex);
+      if (ai >= 0) at = ai - 1;
     }
     // No cursor yet → land on the first row rather than stepping from nowhere.
     const pos = at < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, at + dir));
@@ -291,6 +411,36 @@
       if (!isViewed(p)) return p;
     }
     return null;
+  }
+
+  /** First changed row inside `file`'s segment, as {index, side, line}, or
+      null (file collapsed/loading/absent). Where the cursor should land when
+      a jump brings the reader to this file. */
+  function firstChangeRowIn(items, segments, file) {
+    const seg = segments.find((s) => s.file === file);
+    if (!seg) return null;
+    for (let i = seg.start; i < seg.end; i++) {
+      if (isChangeRow(items[i])) {
+        const l = rowLine(items[i]);
+        if (l) return { index: i, side: l.side, line: l.line };
+      }
+    }
+    return null;
+  }
+
+  /** Index of the first `row` item at or after `file`'s segment start, scanning
+      past the segment's own end into later files if `file` itself is still
+      loading (no rows yet). -1 when `file` has no segment or nothing after it
+      is a row either (e.g. every remaining file is also still loading). Lets
+      the line cursor step from "resting on a still-fetching file" without
+      snapping back to the top of the whole stream. */
+  function firstRowFrom(items, segments, file) {
+    const seg = segments.find((s) => s.file === file);
+    if (!seg) return -1;
+    for (let i = seg.start; i < items.length; i++) {
+      if (items[i].k === "row") return i;
+    }
+    return -1;
   }
 
   // --- commit graph --------------------------------------------------------
@@ -348,11 +498,14 @@
   exp.itemHeight = itemHeight;
   exp.toSplit = toSplit;
   exp.buildItems = buildItems;
+  exp.buildStream = buildStream;
   exp.rowLine = rowLine;
   exp.rowIndexFor = rowIndexFor;
   exp.findChange = findChange;
   exp.focusStep = focusStep;
   exp.searchHits = searchHits;
   exp.nextUnviewed = nextUnviewed;
+  exp.firstChangeRowIn = firstChangeRowIn;
+  exp.firstRowFrom = firstRowFrom;
   exp.computeGraph = computeGraph;
 })(typeof module === "object" && module.exports ? module.exports : (window.RM = {}));

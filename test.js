@@ -43,10 +43,14 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   // a wholly rewritten line gets no word marks — they would be noise
   const [p] = renderPair("aaa bbb ccc", "zzz yyy xxx", "ts");
   assert.ok(!p.includes("wd"), "full rewrite suppresses word diff");
-  assert.ok(highlight('x = "hi" // c', "ts").includes('<span class="s">"hi"</span>'), "string token");
+  // Quotes are HTML-escaped now, so a string literal's own quotes render as
+  // entities — still "hi" once the browser parses them, and safe wherever this
+  // same esc() lands inside an attribute instead of text content.
+  assert.ok(highlight('x = "hi" // c', "ts").includes('<span class="s">&quot;hi&quot;</span>'), "string token");
   assert.ok(highlight("def f(): # c", "py").includes('<span class="c"># c</span>'), "# is a comment in python");
   assert.ok(!highlight("a #b", "ts").includes('class="c"'), "# is not a comment in ts");
   assert.strictEqual(esc("<script>&"), "&lt;script&gt;&amp;", "html is escaped");
+  assert.strictEqual(esc('a "b" c'), "a &quot;b&quot; c", "quotes are escaped for attribute interpolation");
   assert.ok(!highlight('</div>"', "html").includes("<div"), "markup in source cannot break out");
   delete global.window;
 }
@@ -164,6 +168,313 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.strictEqual(RM.computeGraph([{ sha: "A", parents: [] }]).maxLanes, 1, "a lone commit needs one lane");
 }
 
+// --- buildStream: many files, one windowed list ----------------------------
+{
+  const ctx = (i) => ({ t: "ctx", o: i, n: i, s: "line" + i });
+  const mkRows = (n, changeAt) => {
+    const rows = [];
+    for (let i = 1; i <= n; i++) {
+      if (i === changeAt) {
+        rows.push({ t: "del", o: i, s: "old" + i });
+        rows.push({ t: "add", n: i, s: "new" + i });
+      } else rows.push(ctx(i));
+    }
+    return rows;
+  };
+  const files = [
+    { path: "a.js", additions: 1, deletions: 1, status: "modified" },
+    { path: "b.js", additions: 1, deletions: 1, status: "modified" },
+    { path: "c.js", additions: 0, deletions: 0, status: "modified" },
+  ];
+  const perFile = new Map([
+    ["a.js", { loaded: true, rows: mkRows(10, 5), expanded: new Set(), full: false }],
+    ["b.js", { loaded: true, rows: mkRows(10, 5), expanded: new Set(), full: false }],
+    // c.js not loaded yet
+  ]);
+  const base = {
+    files,
+    selected: new Set(["a.js", "b.js", "c.js"]),
+    collapsed: new Set(),
+    perFile,
+    annotations: [],
+    view: "unified",
+    viewedSet: new Set(),
+  };
+
+  const out = RM.buildStream(base);
+  assert.strictEqual(out.items[0].k, "fileHeader", "stream opens with a header");
+  assert.strictEqual(out.items[0].f, "a.js");
+  assert.strictEqual(out.segments.length, 3, "one segment per selected file");
+  const segB = out.segments[1];
+  assert.strictEqual(out.items[segB.start].k, "fileHeader");
+  assert.strictEqual(out.items[segB.start].f, "b.js", "segments in file-list order");
+  assert.ok(out.items.every((it) => it.f), "every stream item knows its file");
+  const segC = out.segments[2];
+  assert.strictEqual(out.items[segC.start + 1].k, "loading", "unloaded file holds a placeholder row");
+  assert.strictEqual(RM.itemHeight(out.items[0]), RM.GEOM.fileHeader, "header height is fixed");
+  assert.strictEqual(RM.itemHeight(out.items[segC.start + 1]), RM.GEOM.row, "loading row is row-height");
+
+  // collapse: segment folds to its header
+  const col = RM.buildStream({ ...base, collapsed: new Set(["a.js"]) });
+  assert.strictEqual(col.segments[0].end - col.segments[0].start, 1, "collapsed file is header-only");
+  assert.strictEqual(col.items[1].k, "fileHeader", "next header follows immediately");
+  assert.strictEqual(col.items[1].f, "b.js");
+
+  // selection: deselected file is absent entirely
+  const sel = RM.buildStream({ ...base, selected: new Set(["b.js"]) });
+  assert.strictEqual(sel.segments.length, 1);
+  assert.ok(sel.items.every((it) => it.f === "b.js"), "deselected files leave no trace");
+
+  // none selected: empty stream
+  assert.strictEqual(RM.buildStream({ ...base, selected: new Set() }).items.length, 0);
+
+  // binary/error file: header + note, no rows
+  const pf2 = new Map(perFile);
+  pf2.set("c.js", { loaded: true, binary: true });
+  const bin = RM.buildStream({ ...base, perFile: pf2 });
+  const segC2 = bin.segments[2];
+  assert.strictEqual(bin.items[segC2.start + 1].k, "note", "binary renders as a note row");
+
+  // regression: one selected, loaded file ≡ buildItems output plus its header
+  const single = RM.buildStream({ ...base, selected: new Set(["a.js"]) });
+  const legacy = RM.buildItems({
+    rows: perFile.get("a.js").rows,
+    annotations: [],
+    file: "a.js",
+    expanded: new Set(),
+    full: false,
+    view: "unified",
+  });
+  assert.strictEqual(single.items.length, legacy.items.length + 1, "stream = header + same items");
+  assert.deepStrictEqual(
+    single.items.slice(1).map((it) => it.k),
+    legacy.items.map((it) => it.k),
+    "same item kinds in the same order"
+  );
+  assert.strictEqual(single.maxLineLen, legacy.maxLineLen, "pan width carries over");
+
+  // rowIndexFor with the file filter: same line number exists in both files
+  const two = RM.buildStream({ ...base, selected: new Set(["a.js", "b.js"]) });
+  const inB = RM.rowIndexFor(two.items, "new", 5, "b.js");
+  assert.ok(inB > two.segments[1].start, "file-filtered lookup lands in b.js, not a.js");
+
+  /* focusStep in a stream: both files number their lines 1..10, so a cursor that
+     does not say which file it is in re-anchors on the first file that has the
+     line and walks a.js while the reader is looking at b.js. */
+  const rowsIn = (f) =>
+    two.items.map((it, i) => ({ it, i })).filter((x) => x.it.k === "row" && x.it.f === f && x.it.u.r && x.it.u.r.n != null);
+  const bRows = rowsIn("b.js");
+  assert.ok(bRows.length > 2, "b.js has rows to walk");
+  const from = { file: "b.js", side: "new", line: bRows[1].it.u.r.n };
+  const stepped = RM.focusStep(two.items, from, 1);
+  assert.strictEqual(stepped.index, bRows[2].i, "a file-aware cursor steps to the next row in b.js");
+  assert.strictEqual(two.items[stepped.index].f, "b.js", "…and never crosses back into a.js");
+  assert.strictEqual(
+    RM.focusStep(two.items, { ...from, file: undefined }, 1).index,
+    rowsIn("a.js")[2].i,
+    "a fileless focus keeps the old, file-blind behavior"
+  );
+
+  /* Collapsing the file the cursor is in takes its rows out of the stream, and a
+     file-aware cursor then matches nothing — focusStep falls back to the first
+     row of the *whole* stream, which is a teleport to the top. app.js answers
+     this by re-anchoring the cursor (`refocusOutOf`), and `rowLine` is exported
+     for it: the app has to name a row it picked out of the stream itself. */
+  const folded = RM.buildStream({ ...base, selected: new Set(["a.js", "b.js"]), collapsed: new Set(["b.js"]) });
+  const firstRowAt = folded.items.findIndex((it) => it.k === "row");
+  assert.strictEqual(folded.items[firstRowAt].f, "a.js", "the first row of the folded stream is back in a.js");
+  assert.strictEqual(RM.focusStep(folded.items, from, 1).index, firstRowAt,
+    "a cursor in a collapsed file falls back to row 0 — the app must re-anchor it");
+  const firstRow = folded.items[firstRowAt];
+  assert.deepStrictEqual(RM.rowLine(firstRow), { side: "new", line: firstRow.u.r.n }, "rowLine names a row's line");
+  assert.strictEqual(RM.rowLine({ k: "fileHeader", f: "a.js" }), null, "…and only a row has one");
+  const delOnly = { k: "row", f: "a.js", u: { t: "del", l: { o: 7, s: "x" }, r: null } };
+  assert.deepStrictEqual(RM.rowLine(delOnly), { side: "old", line: 7 }, "a pure deletion is on the old side");
+
+  // the v-loop walks only the selected stream
+  const sel2 = ["a.js", "c.js"]; // b.js deselected
+  assert.strictEqual(RM.nextUnviewed(sel2, "a.js", (p) => p === "a.js"), "c.js", "next unviewed skips deselected files");
+}
+
+// --- allviewed finish item + firstChangeRowIn ------------------------------
+{
+  const files = [
+    { path: "a.js", additions: 1, deletions: 0 },
+    { path: "b.js", additions: 1, deletions: 0 },
+  ];
+  const rows = [
+    { t: "ctx", o: 1, n: 1, s: "one" },
+    { t: "add", n: 2, s: "two" },
+  ];
+  const pf = new Map([
+    ["a.js", { loaded: true, rows, expanded: new Set(), full: false }],
+    ["b.js", { loaded: true, rows, expanded: new Set(), full: false }],
+  ]);
+  const sel = new Set(["a.js", "b.js"]);
+
+  const done = RM.buildStream({
+    files, selected: sel, collapsed: new Set(sel), perFile: pf,
+    annotations: [{ file: "a.js", side: "new", line: 2, body: "x" }],
+    viewedSet: new Set(sel),
+  });
+  const last = done.items[done.items.length - 1];
+  assert.ok(last.k === "allviewed", "all viewed + all folded → finish item appended last");
+  assert.ok(last.n === 2 && last.comments === 1, "finish item carries file and comment counts");
+  assert.ok(done.segments.length === 2, "finish item is not a segment");
+
+  const reading = RM.buildStream({ files, selected: sel, collapsed: new Set(), perFile: pf, viewedSet: new Set(sel) });
+  assert.ok(!reading.items.some((it) => it.k === "allviewed"), "a file unfolded → still reading, no finish item");
+
+  const part = RM.buildStream({ files, selected: sel, collapsed: new Set(["a.js"]), perFile: pf, viewedSet: new Set(["a.js"]) });
+  assert.ok(!part.items.some((it) => it.k === "allviewed"), "one unviewed file → no finish item");
+
+  const none = RM.buildStream({ files, selected: new Set(), collapsed: new Set(), perFile: pf, viewedSet: new Set() });
+  assert.ok(!none.items.some((it) => it.k === "allviewed"), "empty selection → no finish item");
+
+  assert.ok(RM.itemHeight({ k: "allviewed" }, 80) === RM.GEOM.allViewed, "allviewed row uses its GEOM height");
+
+  const hit = RM.firstChangeRowIn(reading.items, reading.segments, "b.js");
+  assert.ok(hit && hit.side === "new" && hit.line === 2, "firstChangeRowIn skips ctx, finds the add");
+  assert.ok(reading.items[hit.index].f === "b.js", "firstChangeRowIn stays inside the file");
+
+  const pf2 = new Map([["a.js", { loaded: true, rows, expanded: new Set(), full: false }]]);
+  const loading = RM.buildStream({ files, selected: sel, collapsed: new Set(), perFile: pf2 });
+  assert.ok(RM.firstChangeRowIn(loading.items, loading.segments, "b.js") === null, "unloaded file → null");
+  assert.ok(RM.firstChangeRowIn(reading.items, reading.segments, "zzz.js") === null, "unknown file → null");
+
+  // firstRowFrom: where an arrow key should land the cursor when it has no
+  // real position yet but a pending-focus file names where the reader is.
+  const fromB = RM.firstRowFrom(reading.items, reading.segments, "b.js");
+  assert.ok(fromB >= reading.segments[1].start && fromB < reading.segments[1].end, "lands inside b.js's own segment when it has rows");
+  assert.deepStrictEqual(RM.rowLine(reading.items[fromB]), { side: "new", line: 1 }, "…on its first row, ctx included (not just changes)");
+  assert.strictEqual(RM.firstRowFrom(loading.items, loading.segments, "b.js"), -1, "b.js still loading, nothing after it → -1");
+  assert.strictEqual(RM.firstRowFrom(reading.items, reading.segments, "zzz.js"), -1, "unknown file → -1");
+
+  // A pending file that never gets a segment of its own to stand on scans past
+  // it into whatever comes next, rather than giving up at the segment's own end.
+  const files3 = [...files, { path: "c.js", additions: 1, deletions: 0 }];
+  const sel3 = new Set(["a.js", "b.js", "c.js"]);
+  const pf3 = new Map([
+    ["a.js", { loaded: true, rows, expanded: new Set(), full: false }],
+    ["c.js", { loaded: true, rows, expanded: new Set(), full: false }],
+  ]);
+  const skip = RM.buildStream({ files: files3, selected: sel3, collapsed: new Set(), perFile: pf3 });
+  const fromBpastC = RM.firstRowFrom(skip.items, skip.segments, "b.js");
+  const segC = skip.segments[2];
+  assert.ok(fromBpastC >= segC.start && fromBpastC < segC.end, "b.js has no rows of its own → scan continues into c.js");
+
+  // focusStep honors that anchor: forward lands exactly on it instead of on
+  // row 0 of the whole stream (the teleport this exists to prevent).
+  const anchored = RM.focusStep(reading.items, null, 1, fromB);
+  assert.deepStrictEqual({ side: anchored.side, line: anchored.line }, { side: "new", line: 1 }, "anchorIndex seeds the step so dir=1 lands on it");
+  assert.deepStrictEqual(
+    RM.focusStep(reading.items, null, 1),
+    RM.focusStep(reading.items, null, 1, -1),
+    "a negative/absent anchorIndex is a no-op — same as today's rows[0] fallback"
+  );
+}
+
+/* --- buildStream: per-file memoization --------------------------------------
+   Every arrival used to rebuild every OTHER loaded file's rows too, so filling
+   a large stream did quadratic work. buildStream now caches each file's body
+   on the perFile state object the caller owns, keyed on everything the body
+   depends on; only the fileHeader stays built fresh every call. */
+{
+  const ctx = (i) => ({ t: "ctx", o: i, n: i, s: "line" + i });
+  const mkRows = (n, changeAt) => {
+    const rows = [];
+    for (let i = 1; i <= n; i++) {
+      if (i === changeAt) {
+        rows.push({ t: "del", o: i, s: "old" + i });
+        rows.push({ t: "add", n: i, s: "new" + i });
+      } else rows.push(ctx(i));
+    }
+    return rows;
+  };
+  const files = [
+    { path: "a.js", additions: 1, deletions: 1, status: "modified" },
+    { path: "b.js", additions: 1, deletions: 1, status: "modified" },
+  ];
+  const stA = { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false };
+  const stB = { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false };
+  const perFile = new Map([
+    ["a.js", stA],
+    ["b.js", stB],
+  ]);
+  const mkBase = (overrides) => ({
+    files,
+    selected: new Set(["a.js", "b.js"]),
+    collapsed: new Set(),
+    perFile,
+    annotations: [],
+    view: "split",
+    viewedSet: new Set(),
+    ...overrides,
+  });
+  const bodyOf = (out, fileIdx) => out.items.slice(out.segments[fileIdx].start + 1, out.segments[fileIdx].end);
+
+  // 1. identical inputs (same Map, same st objects) → the row items for a file
+  //    are the SAME object references both times, and outputs deep-equal.
+  const r1 = RM.buildStream(mkBase());
+  const r2 = RM.buildStream(mkBase());
+  const bodyA1 = bodyOf(r1, 0);
+  const bodyA2 = bodyOf(r2, 0);
+  assert.strictEqual(bodyA1[0], bodyA2[0], "a.js's first body item is the same object reference across rebuilds");
+  assert.deepStrictEqual(r1, r2, "identical inputs produce deep-equal output");
+
+  // 2. opening a fold invalidates just that file's cache and reflects the change.
+  const foldItem = bodyA1.find((it) => it.k === "fold");
+  assert.ok(foldItem, "fixture has a fold to open");
+  stA.expanded = new Set([foldItem.id]);
+  const r3 = RM.buildStream(mkBase());
+  const bodyA3 = bodyOf(r3, 0);
+  assert.notStrictEqual(bodyA3[0], bodyA1[0], "opening a fold invalidates the cached body");
+  assert.ok(!bodyA3.some((it) => it.k === "fold" && it.id === foldItem.id), "the opened fold no longer renders as a marker");
+  stA.expanded = new Set(); // restore, so later steps compare against the same baseline
+
+  // 3. changing the view invalidates the cache and re-stamps v on the rows.
+  const rSplit = RM.buildStream(mkBase({ view: "split" }));
+  const rowSplit = bodyOf(rSplit, 0).find((it) => it.k === "row");
+  assert.strictEqual(rowSplit.v, "split");
+  const rUnified = RM.buildStream(mkBase({ view: "unified" }));
+  const rowUnified = bodyOf(rUnified, 0).find((it) => it.k === "row");
+  assert.strictEqual(rowUnified.v, "unified", "view change re-stamps v");
+  assert.notStrictEqual(rowSplit, rowUnified, "a different view produces a different cached body");
+
+  // 4. adding an annotation on the file invalidates its cache and the card appears.
+  const r4a = RM.buildStream(mkBase());
+  const ann1 = [{ id: "z1", file: "a.js", side: "new", line: 10, body: "hi" }];
+  const r4b = RM.buildStream(mkBase({ annotations: ann1 }));
+  const bodyA4a = bodyOf(r4a, 0);
+  const bodyA4b = bodyOf(r4b, 0);
+  assert.notStrictEqual(bodyA4a[0], bodyA4b[0], "an annotation on this file invalidates its own cache");
+  assert.ok(bodyA4b.some((it) => it.k === "comment"), "the comment card appears in the rebuilt body");
+
+  // 5. an annotation on a DIFFERENT file leaves this file's body reference unchanged.
+  const ann2 = ann1.concat([{ id: "z2", file: "b.js", side: "new", line: 10, body: "other" }]);
+  const r5 = RM.buildStream(mkBase({ annotations: ann2 }));
+  const bodyA5 = bodyOf(r5, 0);
+  assert.strictEqual(bodyA4b[0], bodyA5[0], "a.js's cache survives an annotation added only to b.js");
+
+  // 6. equivalence: memoized output deep-equals a completely fresh, un-memoized
+  //    build — same kinds, same order, same v/sg stamps.
+  const freshPerFile = new Map([
+    ["a.js", { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false }],
+    ["b.js", { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false }],
+  ]);
+  const memoized = RM.buildStream(mkBase({ annotations: ann2 }));
+  const fresh = RM.buildStream({ ...mkBase({ annotations: ann2 }), perFile: freshPerFile });
+  assert.strictEqual(memoized.items.length, fresh.items.length, "same item count");
+  for (let i = 0; i < memoized.items.length; i++) {
+    assert.strictEqual(memoized.items[i].k, fresh.items[i].k, `item ${i} kind matches`);
+    if (memoized.items[i].k === "row") {
+      assert.strictEqual(memoized.items[i].v, fresh.items[i].v, `item ${i} v matches`);
+      assert.strictEqual(memoized.items[i].sg, fresh.items[i].sg, `item ${i} sg matches`);
+    }
+  }
+  assert.strictEqual(memoized.maxLineLen, fresh.maxLineLen, "maxLineLen matches");
+}
+
 /* --- keyboard focus contract -----------------------------------------------
    The keydown handler needs a document, so the two decisions it kept getting
    wrong live in web/keys.js and are asserted here. A helper with the right
@@ -235,6 +546,21 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   const html = fs.readFileSync(path.join(__dirname, "web", "index.html"), "utf8");
   assert.match(html, /<script src="\/keys\.js"><\/script>/, "index.html loads keys.js");
   assert.ok(html.indexOf("/keys.js") < html.indexOf("/app.js"), "…before app.js reads window.Keys");
+}
+
+// --- drafts: selection and collapse survive a restart -----------------------
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "diffo-drafts-"));
+  process.env.DIFFOTATOR_DATA_DIR = dir;
+  const D = require("./src/drafts");
+  const root = "/fake/repo";
+  D.saveDraft(root, { ann: [], viewed: ["s|a.js"], desel: ["s|b.js"], collapsed: ["s|a.js"] });
+  const back = D.loadDraft(root);
+  assert.deepStrictEqual(back.desel, ["s|b.js"], "deselection persisted");
+  assert.deepStrictEqual(back.collapsed, ["s|a.js"], "collapse persisted");
+  D.saveDraft(root, {}); // nothing left → draft file removed
+  assert.strictEqual(D.loadDraft(root), null, "empty draft is cleared");
+  delete process.env.DIFFOTATOR_DATA_DIR;
 }
 
 // --- git layer against a throwaway repo ------------------------------------
@@ -451,6 +777,21 @@ async function gitFidelity() {
   const revLog = await G.log(root, { rev: w.branch || w.head, limit: 5 });
   assert.strictEqual(revLog.length, 1, "and that revision resolves to commits");
   assert.strictEqual(worktrees[0].branch, "main", "an attached worktree still reports its branch");
+
+  // --base must actually pin the base: the flag used to be parsed and dropped.
+  {
+    g("checkout", "-q", "-b", "feature");
+    put("feat.txt", "feature work\n");
+    g("add", "-A");
+    g("commit", "-qm", "feature commit");
+    g("branch", "-q", "sidebranch", "main"); // a second valid base candidate
+
+    const forced = await G.overview(root, { base: "sidebranch" });
+    assert.strictEqual(forced.base && forced.base.ref, "sidebranch", "--base pins the base");
+
+    const bogus = await G.overview(root, { base: "no-such-ref" });
+    assert.ok(bogus.base && bogus.base.ref !== "no-such-ref", "invalid --base falls back to auto-detect");
+  }
 
   g("worktree", "remove", "--force", det);
   fs.rmSync(det, { recursive: true, force: true });
