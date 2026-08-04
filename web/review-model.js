@@ -430,7 +430,6 @@
   exp.buildItems = buildItems;
   exp.buildStream = buildStream;
   exp.rowLine = rowLine;
-  exp.rowLine = rowLine;
   exp.rowIndexFor = rowIndexFor;
   exp.findChange = findChange;
   exp.focusStep = focusStep;

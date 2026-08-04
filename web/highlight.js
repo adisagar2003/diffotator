@@ -17,9 +17,12 @@
 
   const HASH_LANGS = /^(py|rb|sh|bash|zsh|yml|yaml|toml|conf|ini|rake|gemfile|dockerfile|makefile|pl|r)$/i;
 
-  const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
+  // '"' is escaped too: every caller that interpolates esc() output into an HTML
+  // attribute (data-fhead, data-sel, data-file, title, ...) needs it closed off
+  // against a filename or line of text that contains a quote.
+  const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
   function esc(s) {
-    return s.replace(/[&<>]/g, (c) => ESC[c]);
+    return s.replace(/[&<>"]/g, (c) => ESC[c]);
   }
 
   // one pass: comment | string | number | word | punctuation

@@ -71,9 +71,9 @@ const S = {
 // api
 // ---------------------------------------------------------------------------
 const cache = new Map();
+const apiUrl = (path, params) => `/api/${path}?${new URLSearchParams(params)}`;
 async function api(path, params = {}, { cached = false } = {}) {
-  const q = new URLSearchParams(params);
-  const url = `/api/${path}?${q}`;
+  const url = apiUrl(path, params);
   if (cached && cache.has(url)) return cache.get(url);
   const p = fetch(url).then((r) => r.json());
   if (cached) cache.set(url, p);
@@ -780,38 +780,63 @@ async function fetchStream() {
   const worker = async () => {
     while (next < queue.length) {
       const path = queue[next++];
-      /* No `full: "1"` here. The diff already arrives with full context, so
-         "Full file" only has to stop folding — asking for the whole file as
-         well would render every line while the checkbox read unchecked, and
-         would make the empty/mode-only notes unreachable. Only the File Tree
-         tab, which has no diff, fetches whole files. */
-      const r = await api("diff", { ...scopeParams(), file: path }, { cached: true });
-      if (seq !== streamSeq) return; // scope changed mid-flight
-      const d = r.diff || {};
-      S.perFile.set(path, {
-        loaded: true,
-        rows: d.rows || null,
-        fullRows: null,
-        expanded: new Set(),
-        full: false,
-        binary: d.binary,
-        tooBig: d.tooBig,
-        error: d.error,
-        empty: d.empty,
-        mode: d.mode,
-      });
+      const params = { ...scopeParams(), file: path };
+      try {
+        /* No `full: "1"` here. The diff already arrives with full context, so
+           "Full file" only has to stop folding — asking for the whole file as
+           well would render every line while the checkbox read unchecked, and
+           would make the empty/mode-only notes unreachable. Only the File Tree
+           tab, which has no diff, fetches whole files. */
+        const r = await api("diff", params, { cached: true });
+        if (seq !== streamSeq) return; // scope changed mid-flight
+        const d = r.diff || {};
+        S.perFile.set(path, {
+          loaded: true,
+          rows: d.rows || null,
+          fullRows: null,
+          expanded: new Set(),
+          full: false,
+          binary: d.binary,
+          tooBig: d.tooBig,
+          error: d.error,
+          empty: d.empty,
+          mode: d.mode,
+        });
+      } catch {
+        if (seq !== streamSeq) return; // scope changed mid-flight
+        // A rejected fetch would otherwise cache its own rejection forever —
+        // every future read of this url replays the same failure. Evict it so
+        // the next fetchStream (a fresh scope, a retry) gets a clean attempt.
+        cache.delete(apiUrl("diff", params));
+        S.perFile.set(path, {
+          loaded: true,
+          rows: null,
+          fullRows: null,
+          expanded: new Set(),
+          full: false,
+          error: "could not load diff",
+        });
+      }
       rebuildStream();
     }
   };
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 }
 
+/* Every file unchecked is a choice, not a failure — offer the way back. Shared
+   by renderDiff and rebuildStream so the empty-stream hint stays one string. */
+const nothingSelectedHint = () => `Nothing selected. <b data-selall>Select all</b> to fill the stream.`;
+
 /** Rebuild items from current per-file state and repaint, keeping scroll.
     `refresh`, not `paint`: paint keeps a stale empty state on screen and only
-    reindexes when the item count changes. `refresh` never touches scrollTop. */
+    reindexes when the item count changes. `refresh` never touches scrollTop.
+    A straggler fetch can land after the reader hit "none" — `refresh` alone
+    would blank the pane with no way back, so an empty result gets the same
+    hint `renderDiff` shows instead of a silent, dead-end empty stream. */
 function rebuildStream() {
   buildItems();
-  diffVL.refresh();
+  if (!S.items.length && S.files.length) diffVL.setEmpty(nothingSelectedHint());
+  else diffVL.refresh();
   renderProgress();
   revalidatePin(); // heights moved: the pin may no longer describe anything
   updateStickyHeader(true); // a file arriving can move both the top file and the count
@@ -820,6 +845,9 @@ function rebuildStream() {
 /** Sidebar click / j/k target: make sure it's in the stream, then go there. */
 function scrollToFile(path) {
   if (S.tab === "tree") return selectTreeFile(path);
+  // #commitDetail overlays the diff pane on the Commit tab, so a file click or
+  // j/k landing there would scroll a pane the reader cannot see.
+  if (S.tab === "commit") setTab("changes");
   if (!isSelected(path)) return setSelected(path, true), scrollToFile(path);
   /* Nothing else guarantees the stream matches this tab: the File Tree branch
      of buildItems() clears the segments, setTab rebuilds nothing, and at boot
@@ -1159,8 +1187,7 @@ function renderDiff() {
 
   buildItems();
   if (!S.items.length) {
-    // Every file unchecked. That is a choice, not a failure — offer the way back.
-    diffVL.setEmpty(`Nothing selected. <b data-selall>Select all</b> to fill the stream.`);
+    diffVL.setEmpty(nothingSelectedHint());
   } else if (S.search.q) {
     S.search.hitSet = null;
     runSearch(S.search.q, false);
@@ -1175,6 +1202,10 @@ function renderDiff() {
 
 /** File Tree tab: one whole file, its own header, its own empty states. */
 function renderTreeFile(head) {
+  // The tree tab has no stream, but an early return below can skip buildItems()
+  // — the one place that would otherwise clear this — leaving the Changes tab's
+  // stale segments around for scrollToFile/currentSeg to trust.
+  S.segments = [];
   const path = S.selFile || "";
   head.dataset.file = ""; // the sticky header owns this on the other tab
   if (!path) {
@@ -1450,8 +1481,15 @@ function setTab(tab) {
   $("#commitDetail").hidden = tab !== "commit";
   $("#diffTools").style.visibility = tab === "commit" ? "hidden" : "visible";
   $("#chkViewed").parentElement.hidden = tab === "tree";
-  if (tab === "tree" && !S.treePaths) loadTree();
-  else renderFileTree();
+  if (tab === "tree" && !S.treePaths) {
+    loadTree();
+    return; // loadTree renders the file list itself once paths arrive
+  }
+  renderFileTree();
+  // Leaving the File Tree tab's one-file view behind in #diffBody until the next
+  // click made the stream tab look stuck; repaint here so it always shows the
+  // stream. The tree tab keeps rendering its own diff lazily, from a click.
+  if (tab !== "tree") renderDiff();
 }
 
 /**

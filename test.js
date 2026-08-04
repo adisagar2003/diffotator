@@ -43,10 +43,14 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   // a wholly rewritten line gets no word marks — they would be noise
   const [p] = renderPair("aaa bbb ccc", "zzz yyy xxx", "ts");
   assert.ok(!p.includes("wd"), "full rewrite suppresses word diff");
-  assert.ok(highlight('x = "hi" // c', "ts").includes('<span class="s">"hi"</span>'), "string token");
+  // Quotes are HTML-escaped now, so a string literal's own quotes render as
+  // entities — still "hi" once the browser parses them, and safe wherever this
+  // same esc() lands inside an attribute instead of text content.
+  assert.ok(highlight('x = "hi" // c', "ts").includes('<span class="s">&quot;hi&quot;</span>'), "string token");
   assert.ok(highlight("def f(): # c", "py").includes('<span class="c"># c</span>'), "# is a comment in python");
   assert.ok(!highlight("a #b", "ts").includes('class="c"'), "# is not a comment in ts");
   assert.strictEqual(esc("<script>&"), "&lt;script&gt;&amp;", "html is escaped");
+  assert.strictEqual(esc('a "b" c'), "a &quot;b&quot; c", "quotes are escaped for attribute interpolation");
   assert.ok(!highlight('</div>"', "html").includes("<div"), "markup in source cannot break out");
   delete global.window;
 }
