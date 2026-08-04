@@ -452,6 +452,21 @@ async function gitFidelity() {
   assert.strictEqual(revLog.length, 1, "and that revision resolves to commits");
   assert.strictEqual(worktrees[0].branch, "main", "an attached worktree still reports its branch");
 
+  // --base must actually pin the base: the flag used to be parsed and dropped.
+  {
+    g("checkout", "-q", "-b", "feature");
+    put("feat.txt", "feature work\n");
+    g("add", "-A");
+    g("commit", "-qm", "feature commit");
+    g("branch", "-q", "sidebranch", "main"); // a second valid base candidate
+
+    const forced = await G.overview(root, { base: "sidebranch" });
+    assert.strictEqual(forced.base && forced.base.ref, "sidebranch", "--base pins the base");
+
+    const bogus = await G.overview(root, { base: "no-such-ref" });
+    assert.ok(bogus.base && bogus.base.ref !== "no-such-ref", "invalid --base falls back to auto-detect");
+  }
+
   g("worktree", "remove", "--force", det);
   fs.rmSync(det, { recursive: true, force: true });
   fs.rmSync(d, { recursive: true, force: true });
