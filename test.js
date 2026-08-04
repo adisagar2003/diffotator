@@ -188,6 +188,11 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.strictEqual(K.shortcut({ key: "c", metaKey: true }), null, "⌘C copies, it does not comment");
   assert.strictEqual(K.shortcut({ key: "f", ctrlKey: true }), null);
   assert.strictEqual(K.shortcut({ key: "v", altKey: true }), null);
+  /* The assertions below match the text of app.js, because the wiring they
+     protect only exists in a file that needs a document to run. That makes them
+     brittle to reformatting on purpose: if one fails after a change that altered
+     no behaviour, re-pin the pattern — deleting it removes the only thing holding
+     the fix in place. */
   // One preventDefault for whatever the table owns, rather than one case
   // remembering and the next forgetting.
   assert.match(
@@ -225,7 +230,13 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
     ["closeHelp", "closeModal", "closePopover", "closeSearch"],
     "one named close per dismissal, so there is one place to get this right"
   );
-  for (const [body, name] of closers) assert.match(body, /restoreFocus\(\)/, `${name} hands focus back`);
+  /* …and hands it back to the pane it read *first*. Hiding a focused element
+     blurs it, so a closer that asks afterwards is asking about `<body>` and only
+     lands right through curPane()'s fallback. */
+  for (const [body, name] of closers) {
+    assert.match(body, /const pane = curPane\(\);/, `${name} reads the pane before hiding anything`);
+    assert.match(body, /restoreFocus\(pane\)/, `${name} hands focus back to it`);
+  }
   assert.ok(
     !/return \(\$\("#(modal|helpSheet)"\)\.hidden = true\)/.test(app),
     "no dismissal hides an overlay out from under the reader's focus"

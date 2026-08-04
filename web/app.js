@@ -1011,10 +1011,11 @@ function openSearch() {
   $("#searchInput").focus();
 }
 function closeSearch() {
+  const pane = curPane();
   $("#searchBar").hidden = true;
   S.search = { q: "", hits: [], idx: 0 };
   diffVL.refresh();
-  restoreFocus();
+  restoreFocus(pane);
 }
 $("#searchInput").addEventListener("input", (e) => runSearch(e.target.value));
 $("#searchInput").addEventListener("keydown", (e) => {
@@ -1174,9 +1175,10 @@ function openPopover(anchor, file, side, line) {
 }
 
 function closePopover() {
+  const pane = curPane();
   $("#popover").hidden = true;
   S.popFor = null;
-  restoreFocus();
+  restoreFocus(pane);
 }
 $("#popClose").onclick = closePopover;
 $("#popLabels").addEventListener("click", (e) => {
@@ -1316,8 +1318,9 @@ function openModal(decision) {
   $("#modalSummary").focus();
 }
 function closeModal() {
+  const pane = curPane();
   $("#modal").hidden = true;
-  restoreFocus();
+  restoreFocus(pane);
 }
 $("#modalSummary").addEventListener("input", () => {
   if (pendingDecision === "annotated") $("#modalConfirm").disabled = !S.ann.length && !$("#modalSummary").value.trim();
@@ -1367,8 +1370,9 @@ async function submit(decision) {
 }
 
 function closeHelp() {
+  const pane = curPane();
   $("#helpSheet").hidden = true;
-  restoreFocus();
+  restoreFocus(pane);
 }
 $("#btnHelp").onclick = () => ($("#helpSheet").hidden = false);
 $("#helpClose").onclick = closeHelp;
@@ -1446,9 +1450,15 @@ function movePane(dir) {
    see — and because that box is a textarea, the `typing` guard below then
    swallows every shortcut, so the ↑/↓/c review loop simply stops. Handing focus
    to the pane the reader was already in is the whole of the fix; every
-   dismissal routes through here rather than each remembering separately. */
-function restoreFocus() {
-  $(PANE_SCROLLER[curPane()]).focus();
+   dismissal routes through here rather than each remembering separately.
+
+   Take the pane *before* hiding anything: hiding a focused element blurs it, so
+   by the time this runs `document.activeElement` is usually `<body>`, which is in
+   no pane at all. It landed on the diff anyway, but only via `curPane()`'s
+   fallback — right answer, no idea why. Callers that hide something pass the pane
+   they read first; the file filter, which hides nothing, can still ask. */
+function restoreFocus(pane) {
+  $(PANE_SCROLLER[pane || curPane()]).focus();
 }
 
 // ---------------------------------------------------------------------------
