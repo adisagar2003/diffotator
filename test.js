@@ -164,6 +164,79 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.strictEqual(RM.computeGraph([{ sha: "A", parents: [] }]).maxLanes, 1, "a lone commit needs one lane");
 }
 
+/* --- keyboard focus contract -----------------------------------------------
+   The keydown handler needs a document, so the two decisions it kept getting
+   wrong live in web/keys.js and are asserted here. A helper with the right
+   answer is no use if app.js does not apply it, so the wiring — which only
+   exists as code in a file that cannot be loaded outside a browser — is pinned
+   by reading the source. */
+{
+  const K = require("./web/keys");
+  const app = fs.readFileSync(path.join(__dirname, "web", "app.js"), "utf8");
+
+  // Pressing `c` opened the comment box and then typed a "c" into it: the
+  // keystroke reached the textarea it had just focused. Only `case "/"`
+  // defaulted, so every other shortcut was one focus call away from the same
+  // bug. The handler owns them all now.
+  for (const k of K.SHORTCUTS) assert.strictEqual(K.shortcut({ key: k }), k, `${k} is a shortcut`);
+  for (const k of "c/") assert.ok(K.SHORTCUTS.includes(k), `${k} focuses a text box, so it must be owned`);
+  assert.strictEqual(K.shortcut({ key: "a" }), null, "an unbound key is left to the page");
+  assert.strictEqual(K.shortcut({ key: "ArrowDown" }), null, "arrows are handled before the switch");
+  assert.strictEqual(K.shortcut({ key: "" }), null, "no key is not a shortcut");
+  assert.strictEqual(K.shortcut({ key: "?" }), "?", "shift is not a modifier here — ? is shift+/");
+  // …but only unmodified, or defaulting them would eat the browser's own.
+  assert.strictEqual(K.shortcut({ key: "c", metaKey: true }), null, "⌘C copies, it does not comment");
+  assert.strictEqual(K.shortcut({ key: "f", ctrlKey: true }), null);
+  assert.strictEqual(K.shortcut({ key: "v", altKey: true }), null);
+  // One preventDefault for whatever the table owns, rather than one case
+  // remembering and the next forgetting.
+  assert.match(
+    app,
+    /const key = Keys\.shortcut\(e\);\s*if \(!key\) return;\s*e\.preventDefault\(\);/,
+    "the handler defaults every owned shortcut in one place"
+  );
+  assert.ok(!/case "\/":\s*\n\s*e\.preventDefault\(\)/.test(app), "…and no case defaults on its own");
+
+  // Escape has to release everything that can hold focus. It released four
+  // things and not the file filter, which `/` is the documented way into.
+  const shut = { popover: false, searchBar: false, modal: false, helpSheet: false, fileFilter: false };
+  assert.strictEqual(K.dismissTarget(shut), null, "nothing open, nothing to dismiss");
+  for (const id of K.DISMISS_ORDER) {
+    assert.strictEqual(K.dismissTarget({ ...shut, [id]: true }), id, `Escape releases ${id}`);
+  }
+  assert.ok(K.DISMISS_ORDER.includes("fileFilter"), "the filter is escapable at all");
+  assert.strictEqual(K.DISMISS_ORDER[K.DISMISS_ORDER.length - 1], "fileFilter", "…and last, being no overlay");
+  // Topmost first: a popover over the modal closes itself, and nothing is ever
+  // yanked out from under something drawn over it.
+  assert.strictEqual(K.dismissTarget({ ...shut, popover: true, modal: true, fileFilter: true }), "popover");
+  assert.strictEqual(K.dismissTarget({ ...shut, helpSheet: true, fileFilter: true }), "helpSheet");
+
+  // Every entry needs a close in app.js, or Escape names something the page
+  // cannot act on.
+  for (const id of K.DISMISS_ORDER) {
+    assert.match(app, new RegExp(`^\\s+${id}: \\w+,`, "m"), `app.js knows how to release ${id}`);
+  }
+  // …and every close hands focus back. Hiding an overlay with the caret still
+  // inside leaves document.activeElement on a box nobody can see, and the
+  // `typing` guard then swallows every shortcut after it.
+  const closers = [...app.matchAll(/function (close\w+)\(\) \{[\s\S]*?\n\}/g)];
+  assert.deepStrictEqual(
+    closers.map((m) => m[1]).sort(),
+    ["closeHelp", "closeModal", "closePopover", "closeSearch"],
+    "one named close per dismissal, so there is one place to get this right"
+  );
+  for (const [body, name] of closers) assert.match(body, /restoreFocus\(\)/, `${name} hands focus back`);
+  assert.ok(
+    !/return \(\$\("#(modal|helpSheet)"\)\.hidden = true\)/.test(app),
+    "no dismissal hides an overlay out from under the reader's focus"
+  );
+
+  // And the page has to load the policy, or every keystroke throws.
+  const html = fs.readFileSync(path.join(__dirname, "web", "index.html"), "utf8");
+  assert.match(html, /<script src="\/keys\.js"><\/script>/, "index.html loads keys.js");
+  assert.ok(html.indexOf("/keys.js") < html.indexOf("/app.js"), "…before app.js reads window.Keys");
+}
+
 // --- git layer against a throwaway repo ------------------------------------
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-test-"));
 const sh = (...a) => execFileSync("git", a, { cwd: dir, stdio: "pipe" }).toString();
@@ -696,6 +769,7 @@ async function httpSurface() {
   assert.strictEqual(await status("/"), 200);
   assert.strictEqual(await status("/scope.js"), 200, "the browser can load the shared scope vocabulary");
   assert.strictEqual(await status("/review-model.js"), 200);
+  assert.strictEqual(await status("/keys.js"), 200, "…and the keyboard policy it shares with the page");
   assert.strictEqual(await status("/%2e%2e%2fpackage.json"), 404, "static serving stays inside web/");
 
   // Submitting resolves the session promise; the server never touches teardown.

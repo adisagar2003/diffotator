@@ -13,6 +13,9 @@ const $ = (s) => document.querySelector(s);
 // The fold/split/threading/graph arithmetic lives in review-model.js so it can
 // be tested without a browser; this file is the DOM half.
 const RM = window.RM;
+// Same deal for the keyboard policy: which keystrokes are ours, and what
+// Escape releases. See keys.js.
+const Keys = window.Keys;
 
 const LABELS = ["suggestion", "nit", "question", "issue", "praise", "thought", "note", "todo", "chore"];
 const LANE_COLORS = ["#e5484d", "#f5a524", "#46a758", "#3e9dd6", "#a97bd6", "#e07ba8", "#5eead4", "#f0c674"];
@@ -1011,6 +1014,7 @@ function closeSearch() {
   $("#searchBar").hidden = true;
   S.search = { q: "", hits: [], idx: 0 };
   diffVL.refresh();
+  restoreFocus();
 }
 $("#searchInput").addEventListener("input", (e) => runSearch(e.target.value));
 $("#searchInput").addEventListener("keydown", (e) => {
@@ -1172,6 +1176,7 @@ function openPopover(anchor, file, side, line) {
 function closePopover() {
   $("#popover").hidden = true;
   S.popFor = null;
+  restoreFocus();
 }
 $("#popClose").onclick = closePopover;
 $("#popLabels").addEventListener("click", (e) => {
@@ -1310,12 +1315,16 @@ function openModal(decision) {
   $("#modal").hidden = false;
   $("#modalSummary").focus();
 }
+function closeModal() {
+  $("#modal").hidden = true;
+  restoreFocus();
+}
 $("#modalSummary").addEventListener("input", () => {
   if (pendingDecision === "annotated") $("#modalConfirm").disabled = !S.ann.length && !$("#modalSummary").value.trim();
 });
 $("#btnSend").onclick = () => openModal("annotated");
 $("#btnApprove").onclick = () => openModal("approved");
-$("#modalCancel").onclick = () => ($("#modal").hidden = true);
+$("#modalCancel").onclick = closeModal;
 $("#modalConfirm").onclick = () => submit(pendingDecision);
 $("#btnClose").onclick = () => {
   if (S.ann.length && !confirmDiscard()) return;
@@ -1357,8 +1366,12 @@ async function submit(decision) {
   $("#done").hidden = false;
 }
 
+function closeHelp() {
+  $("#helpSheet").hidden = true;
+  restoreFocus();
+}
 $("#btnHelp").onclick = () => ($("#helpSheet").hidden = false);
-$("#helpClose").onclick = () => ($("#helpSheet").hidden = true);
+$("#helpClose").onclick = closeHelp;
 
 // ---------------------------------------------------------------------------
 // splitters
@@ -1428,9 +1441,39 @@ function movePane(dir) {
   }
 }
 
+/* Anything that takes focus has to give it back. Hiding an overlay while the
+   caret is still inside it leaves `document.activeElement` on a box nobody can
+   see — and because that box is a textarea, the `typing` guard below then
+   swallows every shortcut, so the ↑/↓/c review loop simply stops. Handing focus
+   to the pane the reader was already in is the whole of the fix; every
+   dismissal routes through here rather than each remembering separately. */
+function restoreFocus() {
+  $(PANE_SCROLLER[curPane()]).focus();
+}
+
 // ---------------------------------------------------------------------------
 // keyboard
 // ---------------------------------------------------------------------------
+/* How to release each thing Escape can dismiss, in the order keys.js ranks
+   them. The filter is not an overlay: letting go of it *is* the dismissal. */
+const DISMISS = {
+  popover: closePopover,
+  searchBar: closeSearch,
+  modal: closeModal,
+  helpSheet: closeHelp,
+  fileFilter: restoreFocus,
+};
+function dismiss() {
+  const id = Keys.dismissTarget({
+    popover: !$("#popover").hidden,
+    searchBar: !$("#searchBar").hidden,
+    modal: !$("#modal").hidden,
+    helpSheet: !$("#helpSheet").hidden,
+    fileFilter: document.activeElement === $("#fileFilter"),
+  });
+  if (id) DISMISS[id]();
+}
+
 document.addEventListener("keydown", (e) => {
   const typing = /INPUT|TEXTAREA/.test(e.target.tagName);
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -1441,10 +1484,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (e.key === "Escape") {
-    if (!$("#popover").hidden) return closePopover();
-    if (!$("#searchBar").hidden) return closeSearch();
-    if (!$("#modal").hidden) return ($("#modal").hidden = true);
-    if (!$("#helpSheet").hidden) return ($("#helpSheet").hidden = true);
+    dismiss();
     return;
   }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
@@ -1467,9 +1507,14 @@ document.addEventListener("keydown", (e) => {
     moveFocus(e.key === "ArrowDown" ? 1 : -1);
     return;
   }
+  /* Defaulted once, for whatever the table owns. Per-case was how `c` ended up
+     opening the comment box and then typing a "c" into it. */
+  const key = Keys.shortcut(e);
+  if (!key) return;
+  e.preventDefault();
   const files = S.tab === "tree" ? S.treePaths || [] : S.files.map((f) => f.path);
   const i = files.indexOf(S.selFile);
-  switch (e.key) {
+  switch (key) {
     case "j":
       if (i < files.length - 1) selectFile(files[i + 1]);
       break;
@@ -1499,7 +1544,6 @@ document.addEventListener("keydown", (e) => {
       $("#helpSheet").hidden = false;
       break;
     case "/":
-      e.preventDefault();
       $("#fileFilter").focus();
       break;
     case "c":
