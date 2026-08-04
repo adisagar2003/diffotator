@@ -33,13 +33,16 @@ const S = {
   selCommit: null,
   files: [],
   selFile: null,
-  diff: null, // {rows, binary, tooBig}
-  fullRows: null,
+  // One entry per path: {loaded, rows, fullRows, expanded, full, binary, tooBig, error, empty, mode}
+  perFile: new Map(),
+  desel: new Set(), // scoped keys; empty = everything selected (the default)
+  collapsed: new Set(), // scoped keys
+  segments: [],
+  treeDiff: null, // File Tree tab keeps the old one-file view
+  treeRows: null,
   view: "split",
-  full: false,
   tab: "changes",
   items: [],
-  expanded: new Set(),
   ann: [],
   viewed: new Set(),
   focus: null,
@@ -461,8 +464,8 @@ async function setScope(scope, name, keepCommits) {
   S.scope = scope;
   S.scopeName = name;
   S.selFile = null;
-  S.diff = null;
-  S.fullRows = null;
+  S.perFile = new Map();
+  S.segments = [];
   S.treePaths = null;
   $("#scopeChip").textContent = Scope.label(scope);
   if (!keepCommits) collapseCommits(scope.type !== "commit");
@@ -471,14 +474,16 @@ async function setScope(scope, name, keepCommits) {
   if (seq !== scopeSeq) return;
   S.files = files;
   render();
+  fetchStream(); // not awaited: each arrival repaints the stream it lands in
   // The File Tree pane is scope-specific and was just invalidated; without this
   // it stays empty until the reader happens to toggle tabs.
   if (S.tab === "tree") {
     await loadTree();
     if (seq !== scopeSeq) return; // a newer scope won while the tree was in flight
   }
-  const first = files[0];
-  if (first) selectFile(first.path);
+  // The stream shows every selected file, so there is nothing to "open" — the
+  // first path is only the cursor j/k and the viewed toggle start from.
+  S.selFile = files.length ? files[0].path : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -576,6 +581,33 @@ function setViewed(path, on) {
   changed();
 }
 
+/* Selection and collapse are per scope for the same reason viewed is, and they
+   are stored as the *exceptions*: an empty `desel` means the whole review is in
+   the stream, which is what a fresh scope should show. */
+const isSelected = (path) => !S.desel.has(viewKey(path));
+function setSelected(path, on) {
+  const k = viewKey(path);
+  on ? S.desel.delete(k) : S.desel.add(k);
+  changed(); // render() → renderDiff() → buildItems() rebuilds the stream; no separate rebuild
+  if (on) fetchStream(); // a newly selected file may not be loaded yet
+}
+function selectAll(on) {
+  for (const f of S.files) {
+    const k = viewKey(f.path);
+    on ? S.desel.delete(k) : S.desel.add(k);
+  }
+  changed();
+  if (on) fetchStream();
+}
+const isCollapsed = (path) => S.collapsed.has(viewKey(path));
+function setCollapsed(path, on) {
+  const k = viewKey(path);
+  on ? S.collapsed.add(k) : S.collapsed.delete(k);
+  buildItems();
+  diffVL.refresh();
+  saveDraft();
+}
+
 function renderProgress() {
   const total = S.files.length;
   const seen = S.files.filter((f) => isViewed(f.path)).length;
@@ -649,7 +681,7 @@ $("#fileTree").addEventListener("click", (e) => {
     return;
   }
   const f = e.target.closest(".tnode[data-file]");
-  if (f) selectFile(f.dataset.file);
+  if (f) scrollToFile(f.dataset.file);
 });
 
 function setListMode(on) {
@@ -669,47 +701,71 @@ $("#fileFilter").addEventListener("input", (e) => {
 // ---------------------------------------------------------------------------
 // diff loading + rendering
 // ---------------------------------------------------------------------------
-let loadTimer = null;
-async function selectFile(path) {
+let streamSeq = 0;
+/** Fetch every selected, not-yet-loaded file, a few at a time, in list order.
+    Each arrival re-slots into the stream; the reader reads while it fills. */
+async function fetchStream() {
+  const seq = ++streamSeq;
+  const queue = S.files.map((f) => f.path).filter((p) => isSelected(p) && !(S.perFile.get(p) || {}).loaded);
+  const CONCURRENCY = 4;
+  let next = 0;
+  const worker = async () => {
+    while (next < queue.length) {
+      const path = queue[next++];
+      /* No `full: "1"` here. The diff already arrives with full context, so
+         "Full file" only has to stop folding — asking for the whole file as
+         well would render every line while the checkbox read unchecked, and
+         would make the empty/mode-only notes unreachable. Only the File Tree
+         tab, which has no diff, fetches whole files. */
+      const r = await api("diff", { ...scopeParams(), file: path }, { cached: true });
+      if (seq !== streamSeq) return; // scope changed mid-flight
+      const d = r.diff || {};
+      S.perFile.set(path, {
+        loaded: true,
+        rows: d.rows || null,
+        fullRows: null,
+        expanded: new Set(),
+        full: false,
+        binary: d.binary,
+        tooBig: d.tooBig,
+        error: d.error,
+        empty: d.empty,
+        mode: d.mode,
+      });
+      rebuildStream();
+    }
+  };
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+}
+
+/** Rebuild items from current per-file state and repaint, keeping scroll. */
+function rebuildStream() {
+  buildItems();
+  diffVL.paint(true);
+  renderProgress();
+}
+
+/** Sidebar click / j/k target: make sure it's in the stream, then go there. */
+function scrollToFile(path) {
+  if (S.tab === "tree") return selectTreeFile(path);
+  if (!isSelected(path)) return setSelected(path, true), scrollToFile(path);
+  const seg = S.segments.find((s) => s.file === path);
+  if (!seg) return;
   S.selFile = path;
-  S.expanded.clear();
+  diffVL.scrollToIndex(seg.start, false);
   renderFileTree();
   syncViewedToggle();
-  if (S.tab === "commit") setTab("changes");
-  $("#diffBody").scrollTop = 0;
-  // Most files land in well under 100ms; a spinner that fast reads as a flicker.
-  clearTimeout(loadTimer);
-  loadTimer = setTimeout(() => {
-    if (S.selFile === path && !S.diff && !S.fullRows) diffVL.setEmpty("Loading…");
-  }, 150);
+}
 
-  S.diff = null;
-  S.fullRows = null;
-  S.fullMeta = null;
-  if (S.tab === "tree") {
-    const { full } = await api("file", { ...scopeParams(), file: path }, { cached: true });
-    if (S.selFile !== path) return;
-    clearTimeout(loadTimer);
-    S.diff = null;
-    S.fullRows = full && full.rows ? full.rows : null;
-    S.fullMeta = full;
-    renderDiff();
-    return;
-  }
-  /* No `full: "1"` here. The diff already arrives with full context, so "Full
-     file" only has to stop folding — asking for the whole file as well left
-     S.fullRows populated for every file, which rendered the entire file while
-     the checkbox read unchecked and made the empty/mode-only states below
-     unreachable. Only the File Tree tab, which has no diff, needs it. */
-  const r = await api("diff", { ...scopeParams(), file: path }, { cached: true });
+/** File Tree tab: unchanged behavior — fetch whole file, show alone. */
+async function selectTreeFile(path) {
+  S.selFile = path;
+  renderFileTree();
+  const { full } = await api("file", { ...scopeParams(), file: path }, { cached: true });
   if (S.selFile !== path) return;
-  clearTimeout(loadTimer);
-  S.diff = r.diff;
+  S.treeRows = full && full.rows ? full.rows : null;
+  S.treeDiff = full;
   renderDiff();
-  // warm the next file so j/k feels instant
-  const i = S.files.findIndex((f) => f.path === path);
-  const nx = S.files[i + 1];
-  if (nx) api("diff", { ...scopeParams(), file: nx.path }, { cached: true });
 }
 
 const annKey = RM.annKey;
@@ -717,18 +773,32 @@ const annIndex = () => RM.annIndex(S.ann);
 
 /** Hand the current state to the review model and keep what it returns. */
 function buildItems() {
-  const out = RM.buildItems({
-    rows: S.diff && S.diff.rows,
-    fullRows: S.fullRows,
+  if (S.tab === "tree") {
+    // File Tree keeps the old one-file view: whole file, no stream.
+    const out = RM.buildItems({
+      fullRows: S.treeRows,
+      annotations: S.ann,
+      file: S.selFile,
+      expanded: new Set(),
+      full: true,
+      view: S.view,
+    });
+    S.items = out.items.map((it) => (it.k === "row" ? { ...it, v: out.effView, sg: out.singleGutter } : it));
+    S.segments = [];
+    sizePan(out.maxLineLen * S.charW + 24);
+    return;
+  }
+  const out = RM.buildStream({
+    files: S.files,
+    selected: new Set(S.files.map((f) => f.path).filter(isSelected)),
+    collapsed: new Set(S.files.map((f) => f.path).filter(isCollapsed)),
+    perFile: S.perFile,
     annotations: S.ann,
-    file: S.selFile,
-    expanded: S.expanded,
-    full: S.full,
     view: S.view,
+    viewedSet: new Set(S.files.map((f) => f.path).filter(isViewed)),
   });
   S.items = out.items;
-  S.effView = out.effView;
-  S.singleGutter = out.singleGutter;
+  S.segments = out.segments;
   sizePan(out.maxLineLen * S.charW + 24);
 }
 
@@ -736,8 +806,11 @@ function buildItems() {
 function sizePan(contentW) {
   const body = $("#diffBody");
   const bar = $("#hscroll");
-  const gut = S.effView === "split" ? 48 : S.singleGutter ? 48 : 96;
-  const visible = (body.clientWidth || 800) / (S.effView === "split" ? 2 : 1) - gut;
+  /* Segments can mix split and unified, so there is no one effective view to
+     read here. `S.view` is the *requested* view — close enough for a scrollbar
+     bound, and a conservative gutter errs toward "more scrollable". */
+  const gut = 96; // conservative: widest gutter any segment can have
+  const visible = (body.clientWidth || 800) / (S.view === "split" ? 2 : 1) - gut;
   S.panMax = Math.max(0, contentW - visible);
   $("#hscrollInner").style.width = contentW + "px";
   bar.classList.toggle("off", S.panMax < 2);
@@ -897,8 +970,10 @@ function renderDiff() {
     return;
   }
 
-  const meta = S.diff || S.fullMeta || {};
-  const alt = S.fullMeta || {};
+  /* A stream has no single file's metadata: binary, too-big and mode-only files
+     get their own note row inside it. Only the File Tree tab, which still shows
+     one whole file, has meta to speak for the pane. */
+  const meta = (S.tab === "tree" ? S.treeDiff : null) || {};
 
   head.innerHTML = `
     <span class="fp" title="${esc(path)}">${esc(parts.join("/"))}${parts.length ? "/" : ""}<b>${esc(name)}</b></span>
@@ -916,14 +991,14 @@ function renderDiff() {
     <div class="nav"><button data-nav="prev" title="Previous change (p)">▲</button><button data-nav="next" title="Next change (n)">▼</button></div>`;
 
   const problem =
-    meta.error || alt.error
-      ? `Could not read this file.<br><span class="hint">${esc(meta.error || alt.error)}</span>`
-      : meta.binary || alt.binary
+    meta.error
+      ? `Could not read this file.<br><span class="hint">${esc(meta.error)}</span>`
+      : meta.binary
       ? "Binary file — nothing to diff."
-      : meta.tooBig || alt.tooBig
+      : meta.tooBig
       ? `Diff is too large to render${meta.changed ? ` (${meta.changed.toLocaleString()} changed lines)` : ""}.` +
         `<br><span class="hint">Review it in your editor instead.</span>`
-      : meta.empty && !(S.fullRows && S.fullRows.length)
+      : meta.empty && !(S.treeRows && S.treeRows.length)
       ? // A chmod has no content to show, and "Empty file." would be a lie.
         meta.mode
         ? `Mode changed — <b>${meta.mode.old} → ${meta.mode.new}</b>.` +
@@ -950,7 +1025,12 @@ function renderDiff() {
 $("#diffBody").addEventListener("click", (e) => {
   const fold = e.target.closest(".fold[data-fold]");
   if (fold) {
-    S.expanded.add(fold.dataset.fold);
+    /* Fold state belongs to a file now, and fold ids repeat across the stream,
+       so the marker has to say whose it is. Task 5 renders that; until then the
+       current file is the only one that can be expanded. */
+    const st = S.perFile.get(fold.dataset.file || S.selFile);
+    if (!st) return;
+    st.expanded.add(fold.dataset.fold);
     buildItems();
     diffVL.refresh();
     return;
@@ -1101,7 +1181,7 @@ function toggleViewed(on) {
   setViewed(S.selFile, on);
   if (!on) return;
   const nx = nextUnviewed();
-  if (nx) selectFile(nx);
+  if (nx) scrollToFile(nx);
 }
 
 $("#chkFull").onchange = (e) => {
@@ -1122,7 +1202,12 @@ function saveDraft() {
     fetch("/api/draft", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ann: S.ann, viewed: [...S.viewed] }),
+      body: JSON.stringify({
+        ann: S.ann,
+        viewed: [...S.viewed],
+        desel: [...S.desel],
+        collapsed: [...S.collapsed],
+      }),
     }).catch(() => {});
   }, 250);
 }
@@ -1131,10 +1216,13 @@ function loadDraft() {
   if (!d) return;
   S.ann = d.ann || [];
   S.viewed = new Set(d.viewed || []);
+  S.desel = new Set(d.desel || []);
+  S.collapsed = new Set(d.collapsed || []);
 }
 
 function lineText(file, side, line) {
-  const src = (S.diff && S.diff.rows) || S.fullRows || [];
+  const st = S.perFile.get(file);
+  const src = (st && (st.rows || st.fullRows)) || S.treeRows || [];
   for (const r of src) {
     if (side === "new" && r.n === line && r.t !== "del") return r.s;
     if (side === "old" && r.o === line && r.t !== "add") return r.s;
@@ -1273,9 +1361,10 @@ $("#cpList").addEventListener("click", async (e) => {
   if (!a) return;
   if (S.selFile !== a.file) {
     if (!S.files.some((f) => f.path === a.file)) setTab("tree");
-    await selectFile(a.file);
+    await scrollToFile(a.file);
   }
-  const target = RM.rowIndexFor(S.items, a.side, a.line);
+  // Line numbers repeat across a stream, so the file has to be part of the match.
+  const target = RM.rowIndexFor(S.items, a.side, a.line, a.file);
   if (target >= 0) diffVL.scrollToIndex(target, true);
   S.focus = { file: a.file, side: a.side, line: a.line };
   renderDiff();
@@ -1516,10 +1605,10 @@ document.addEventListener("keydown", (e) => {
   const i = files.indexOf(S.selFile);
   switch (key) {
     case "j":
-      if (i < files.length - 1) selectFile(files[i + 1]);
+      if (i < files.length - 1) scrollToFile(files[i + 1]);
       break;
     case "k":
-      if (i > 0) selectFile(files[i - 1]);
+      if (i > 0) scrollToFile(files[i - 1]);
       break;
     case "n":
       jumpChange(1);
