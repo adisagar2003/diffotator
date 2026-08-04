@@ -219,7 +219,8 @@ function sidebar() {
       ov.worktrees
         .map(
           (w) =>
-            `<div class="side-item" data-act="rev" data-rev="${esc(w.branch || "HEAD")}">
+            // A detached worktree has no branch; its HEAD sha is what git can resolve.
+            `<div class="side-item" data-act="rev" data-rev="${esc(w.branch || w.head || "HEAD")}">
               <span class="ico">🗂</span><span class="lbl" title="${esc(w.path)}">${esc(w.name)}</span></div>`
         )
         .join("")
@@ -413,6 +414,11 @@ async function loadCommits(select = true) {
   S.commits = commits;
   S.graph = computeGraph(commits);
   commitVL.refresh();
+  // git answers an unresolvable revision with an empty log, which is also what
+  // a branch with no commits looks like. Either way, blanking the pane and
+  // saying nothing reads as the click having done nothing at all.
+  if (!commits.length)
+    commitVL.setEmpty(S.commitRev ? `No commits for <b>${esc(S.commitRev)}</b>.` : "No commits yet.");
   if (select && commits.length) selectCommit(commits[0].sha);
 }
 
@@ -676,6 +682,7 @@ async function selectFile(path) {
 
   S.diff = null;
   S.fullRows = null;
+  S.fullMeta = null;
   if (S.tab === "tree") {
     const { full } = await api("file", { ...scopeParams(), file: path }, { cached: true });
     if (S.selFile !== path) return;
@@ -686,17 +693,20 @@ async function selectFile(path) {
     renderDiff();
     return;
   }
-  const r = await api("diff", { ...scopeParams(), file: path, full: "1" }, { cached: true });
+  /* No `full: "1"` here. The diff already arrives with full context, so "Full
+     file" only has to stop folding — asking for the whole file as well left
+     S.fullRows populated for every file, which rendered the entire file while
+     the checkbox read unchecked and made the empty/mode-only states below
+     unreachable. Only the File Tree tab, which has no diff, needs it. */
+  const r = await api("diff", { ...scopeParams(), file: path }, { cached: true });
   if (S.selFile !== path) return;
   clearTimeout(loadTimer);
   S.diff = r.diff;
-  S.fullRows = r.full && r.full.rows ? r.full.rows : null;
-  S.fullMeta = r.full;
   renderDiff();
   // warm the next file so j/k feels instant
   const i = S.files.findIndex((f) => f.path === path);
   const nx = S.files[i + 1];
-  if (nx) api("diff", { ...scopeParams(), file: nx.path, full: "1" }, { cached: true });
+  if (nx) api("diff", { ...scopeParams(), file: nx.path }, { cached: true });
 }
 
 const annKey = RM.annKey;
@@ -755,6 +765,17 @@ const charsPerComment = () => ($("#diffBody").clientWidth - 150) / (S.uiCharW ||
 const commentLines = (a) => RM.commentLines(a, charsPerComment());
 const itemHeight = (i) => RM.itemHeight(S.items[i], charsPerComment());
 
+/* Whitespace nobody can see is still a change. A CRLF line and its LF twin are
+   the same glyphs, and so are two lines that differ only in the newline git
+   reports as "\ No newline at end of file" — without these the reviewer is
+   looking at red rows beside identical green ones with nothing to tell them
+   apart. Only rows that carry the flag pay for it. */
+const eolMark = (r) =>
+  !r
+    ? ""
+    : (r.cr ? `<span class="eol" title="CRLF line ending">CR</span>` : "") +
+      (r.nonl ? `<span class="eol" title="No newline at end of file">no newline</span>` : "");
+
 /**
  * One entry per row kind. The pane started as code rows, then grew fold markers
  * and comment cards, and the if-chain had to be read top to bottom to find out
@@ -810,7 +831,7 @@ const ROW_HTML = {
       return `<div class="drow${focused}${hit}" style="top:${top}px">
         <div class="side only">
           ${gutters}
-          <div class="txt ${cls}"><span class="pan">${HL.highlight(r.s, lang)}</span></div>
+          <div class="txt ${cls}"><span class="pan">${HL.highlight(r.s, lang)}${eolMark(r)}</span></div>
         </div></div>`;
     }
 
@@ -830,11 +851,11 @@ const ROW_HTML = {
     return `<div class="drow${focL || focR}${hit}" style="top:${top}px">
       <div class="side">
         ${gutHtml("old", L ? L.o ?? null : null, lcls)}
-        <div class="txt ${L ? lcls : "empty"}"><span class="pan">${lh ?? ""}</span></div>
+        <div class="txt ${L ? lcls : "empty"}"><span class="pan">${lh ?? ""}${eolMark(L)}</span></div>
       </div>
       <div class="side">
         ${gutHtml("new", R ? R.n ?? null : null, rcls)}
-        <div class="txt ${R ? rcls : "empty"}"><span class="pan">${rh ?? ""}</span></div>
+        <div class="txt ${R ? rcls : "empty"}"><span class="pan">${rh ?? ""}${eolMark(R)}</span></div>
       </div>
     </div>`;
   },
@@ -873,9 +894,13 @@ function renderDiff() {
     return;
   }
 
+  const meta = S.diff || S.fullMeta || {};
+  const alt = S.fullMeta || {};
+
   head.innerHTML = `
     <span class="fp" title="${esc(path)}">${esc(parts.join("/"))}${parts.length ? "/" : ""}<b>${esc(name)}</b></span>
     ${f ? `<span class="plus">+${f.additions}</span><span class="minus">−${f.deletions}</span>` : ""}
+    ${meta.mode ? `<span class="mode" title="file mode changed">${meta.mode.old} → ${meta.mode.new}</span>` : ""}
     ${f && f.oldPath ? `<span style="color:var(--muted)">← ${esc(f.oldPath)}</span>` : ""}
     <span class="grow"></span>
     ${(() => {
@@ -887,8 +912,6 @@ function renderDiff() {
     })()}
     <div class="nav"><button data-nav="prev" title="Previous change (p)">▲</button><button data-nav="next" title="Next change (n)">▼</button></div>`;
 
-  const meta = S.diff || S.fullMeta || {};
-  const alt = S.fullMeta || {};
   const problem =
     meta.error || alt.error
       ? `Could not read this file.<br><span class="hint">${esc(meta.error || alt.error)}</span>`
@@ -898,7 +921,11 @@ function renderDiff() {
       ? `Diff is too large to render${meta.changed ? ` (${meta.changed.toLocaleString()} changed lines)` : ""}.` +
         `<br><span class="hint">Review it in your editor instead.</span>`
       : meta.empty && !(S.fullRows && S.fullRows.length)
-      ? f && f.status === "deleted"
+      ? // A chmod has no content to show, and "Empty file." would be a lie.
+        meta.mode
+        ? `Mode changed — <b>${meta.mode.old} → ${meta.mode.new}</b>.` +
+          `<br><span class="hint">No content changed.</span>`
+        : f && f.status === "deleted"
         ? "File deleted — it was empty."
         : "Empty file."
       : null;
