@@ -1779,8 +1779,11 @@ $("#cpList").addEventListener("click", async (e) => {
   }
   // The file's diff may not have arrived yet — early after boot/scope switch,
   // or because scrollToFile just re-selected a file that was deselected. Wait
-  // for it rather than racing rowIndexFor against a loading placeholder.
-  if (!(S.perFile.get(a.file) || {}).loaded) await loadFileDiff(a.file);
+  // for it rather than racing rowIndexFor against a loading placeholder. Only
+  // for a stream jump: on the tree tab loadFileDiff's rebuildStream() would
+  // run buildItems against the stream and stomp renderTreeFile's own state
+  // (e.g. its "Could not read this file" note) with the stream's empty hint.
+  if (S.tab !== "tree" && !(S.perFile.get(a.file) || {}).loaded) await loadFileDiff(a.file);
   // Line numbers repeat across a stream, so the file has to be part of the match.
   const target = RM.rowIndexFor(S.items, a.side, a.line, a.file);
   if (target >= 0) diffVL.scrollToIndex(target, true);
