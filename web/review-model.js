@@ -341,6 +341,37 @@
     return { graph, maxLanes: Math.min(maxLanes, laneCap) };
   }
 
+  // --- sidebar -------------------------------------------------------------
+
+  /**
+   * The three scope rows, with their badges and the one that is highlighted.
+   * `localCount` is the working tree's own file count, not the open scope's:
+   * six local changes are still six while you read a commit. `row` is the row
+   * the reader last chose — a commit is reached *from* a row and owns none of
+   * its own, so it leaves this alone and the row it came from stays lit.
+   */
+  function sideRows({ row, localCount, base }) {
+    const rows = [{ row: "Local Changes", act: "scope-worktree", ico: "📝", label: "Local Changes" }];
+    if (base) rows.push({ row: "Branch", act: "scope-range", ico: "⑂", label: `vs ${base}` });
+    rows.push({ row: "All Commits", act: "scope-all", ico: "≡", label: "All Commits" });
+    return rows.map((r) => ({
+      ...r,
+      badge: r.act === "scope-worktree" && localCount != null ? String(localCount) : "",
+      active: r.row === row,
+    }));
+  }
+
+  /**
+   * A ref group's rows and its badge. Long lists are capped so the sidebar
+   * stays cheap to render; the badge then has to admit it, because a count the
+   * rows below do not add up to reads as "that branch is gone" rather than
+   * "that branch is hidden".
+   */
+  function sideGroup(items, cap) {
+    const shown = cap && items.length > cap ? items.slice(0, cap) : items;
+    return { shown, badge: shown.length < items.length ? `${shown.length}/${items.length}` : String(items.length) };
+  }
+
   exp.GEOM = GEOM;
   exp.annKey = annKey;
   exp.annIndex = annIndex;
@@ -354,5 +385,7 @@
   exp.focusStep = focusStep;
   exp.searchHits = searchHits;
   exp.nextUnviewed = nextUnviewed;
+  exp.sideRows = sideRows;
+  exp.sideGroup = sideGroup;
   exp.computeGraph = computeGraph;
 })(typeof module === "object" && module.exports ? module.exports : (window.RM = {}));

@@ -164,6 +164,36 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.strictEqual(RM.computeGraph([{ sha: "A", parents: [] }]).maxLanes, 1, "a lone commit needs one lane");
 }
 
+/* --- sidebar ---------------------------------------------------------------
+   What the sidebar claims: one highlighted row wherever you are, and badges
+   that agree with the rows underneath them. Both were HTML strings in app.js,
+   so both drifted from the truth with nothing to catch it. */
+{
+  const rows = (row, localCount) => RM.sideRows({ row, localCount, base: "origin/main" });
+  // The count is the working tree's, not the open scope's: 6 local changes are
+  // still 6 while you are reading a commit.
+  assert.deepStrictEqual(
+    rows("All Commits", 6).map((r) => r.badge),
+    ["6", "", ""],
+    "leaving the worktree scope does not empty its badge"
+  );
+  assert.strictEqual(rows("All Commits", 0).find((r) => r.act === "scope-worktree").badge, "0");
+  // Every row name the app stores lights exactly one row — including while a
+  // commit is open, which keeps the row it was reached from.
+  for (const row of ["Local Changes", "Branch", "All Commits"]) {
+    const lit = rows(row, 3).filter((r) => r.active);
+    assert.deepStrictEqual(lit.map((r) => r.row), [row], `${row} highlights its own row`);
+  }
+  assert.strictEqual(RM.sideRows({ row: "Local Changes", localCount: 1 }).length, 2, "no base ref, no branch row");
+
+  const many = Array.from({ length: 305 }, (_, i) => ({ name: "b" + i }));
+  assert.strictEqual(RM.sideGroup(many, 300).shown.length, 300, "long lists stay capped");
+  assert.strictEqual(RM.sideGroup(many, 300).badge, "300/305", "a capped badge says what it is hiding");
+  assert.deepStrictEqual(RM.sideGroup(many.slice(0, 3), 300), { shown: many.slice(0, 3), badge: "3" });
+  assert.strictEqual(RM.sideGroup([{}, {}]).badge, "2", "an uncapped group is still counted");
+  assert.strictEqual(RM.sideGroup([]).badge, "0");
+}
+
 // --- git layer against a throwaway repo ------------------------------------
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-test-"));
 const sh = (...a) => execFileSync("git", a, { cwd: dir, stdio: "pipe" }).toString();
