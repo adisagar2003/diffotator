@@ -332,6 +332,21 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.ok(html.indexOf("/keys.js") < html.indexOf("/app.js"), "…before app.js reads window.Keys");
 }
 
+// --- drafts: selection and collapse survive a restart -----------------------
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "diffo-drafts-"));
+  process.env.DIFFOTATOR_DATA_DIR = dir;
+  const D = require("./src/drafts");
+  const root = "/fake/repo";
+  D.saveDraft(root, { ann: [], viewed: ["s|a.js"], desel: ["s|b.js"], collapsed: ["s|a.js"] });
+  const back = D.loadDraft(root);
+  assert.deepStrictEqual(back.desel, ["s|b.js"], "deselection persisted");
+  assert.deepStrictEqual(back.collapsed, ["s|a.js"], "collapse persisted");
+  D.saveDraft(root, {}); // nothing left → draft file removed
+  assert.strictEqual(D.loadDraft(root), null, "empty draft is cleared");
+  delete process.env.DIFFOTATOR_DATA_DIR;
+}
+
 // --- git layer against a throwaway repo ------------------------------------
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-test-"));
 const sh = (...a) => execFileSync("git", a, { cwd: dir, stdio: "pipe" }).toString();
