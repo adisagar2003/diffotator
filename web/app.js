@@ -1114,7 +1114,7 @@ const ROW_HTML = {
      (binary, too big, mode-only). Both are one fixed-height row, so the
      prefix-sum index is exact before the fetch lands and after it does. */
   loading(item, top) {
-    return `<div class="fold" style="top:${top}px">Loading ${esc(item.f)}…</div>`;
+    return `<div class="fold loading" style="top:${top}px">Loading ${esc(item.f)}…</div>`;
   },
 
   note(item, top) {
@@ -1808,7 +1808,12 @@ $("#cpList").addEventListener("click", async (e) => {
   }
   // Line numbers repeat across a stream, so the file has to be part of the match.
   const target = RM.rowIndexFor(S.items, a.side, a.line, a.file);
-  if (target >= 0) diffVL.scrollToIndex(target, true);
+  if (target >= 0) {
+    diffVL.scrollToIndex(target, true);
+    // A comment at the stream's bottom cannot scroll to the top of the pane;
+    // the pin is how every other jump keeps the sticky header honest here.
+    pinAfterScroll(a.file);
+  }
   S.focus = { file: a.file, side: a.side, line: a.line };
   renderDiff();
 });

@@ -293,6 +293,9 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 /* Not a diff and not a fold — a sentence about why a file has nothing to show. */
 .fold.note{font-style:italic;cursor:default}
 .fold.note:hover{background:#1f2226;color:var(--muted)}
+/* In flight, not clickable — same shape as a fold, none of the affordance. */
+.fold.loading{cursor:default}
+.fold.loading:hover{background:#1f2226;color:var(--muted)}
 /* The finish card. Height is exactly RM.GEOM.allViewed (96) — border-box, so
    the borders live inside it — or the prefix-sum index drifts. */
 .avc{
