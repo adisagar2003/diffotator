@@ -84,6 +84,13 @@ const ROUTES = {
     return { ok: true };
   },
 
+  "GET /api/prefs": async () => D.loadPrefs(),
+
+  "POST /api/prefs": async ({ body }) => {
+    D.savePrefs(await body());
+    return { ok: true };
+  },
+
   "GET /api/commits": async ({ root, q }) => ({
     commits: await G.log(root, {
       limit: +(q.get("limit") || 300),

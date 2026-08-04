@@ -1802,6 +1802,7 @@ document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () 
 function toggleSidebar() {
   const off = $("#sidebar").classList.toggle("off");
   document.querySelector('.vsplit[data-target="sidebar"]').style.display = off ? "none" : "";
+  Prefs.set("panel.sidebarOff", off);
   diffVL.paint(true);
   commitVL.paint(true);
 }
@@ -1856,6 +1857,50 @@ function setFullOnCurrent(on) {
 /* Drafts live on the server, not in localStorage: localStorage is keyed to the
    origin including the port, and every run binds a new random port, so drafts
    written by one session were invisible to the next. */
+/*
+ * UI preferences: the same disk-over-localStorage reasoning, but global — a
+ * pane width is a fact about your screen, not the repository. One store, one
+ * seam: anything the UI wants remembered goes through these two calls; the
+ * server holds a flat JSON object and never interprets the keys.
+ */
+const Prefs = {
+  data: {},
+  timer: null,
+  async load() {
+    try {
+      this.data = (await api("prefs")) || {};
+    } catch {
+      this.data = {}; // defaults are always an acceptable answer
+    }
+  },
+  get(key, dflt) {
+    return key in this.data ? this.data[key] : dflt;
+  },
+  set(key, value) {
+    if (this.data[key] === value) return;
+    this.data[key] = value;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      fetch("/api/prefs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(this.data),
+      }).catch(() => {}); // lost prefs must never take the review down
+    }, 250);
+  },
+};
+
+/* Panel geometry restores by splitter target id; the splitter's mouseup is the
+   single writer, so a size that was never touched is never stored. */
+const PANEL_DIMS = { sidebar: "width", leftPane: "width", commitPane: "height", timelinePane: "height" };
+function applyPanelPrefs() {
+  for (const [id, dim] of Object.entries(PANEL_DIMS)) {
+    const v = +Prefs.get("panel." + id);
+    if (v) document.getElementById(id).style[dim] = v + "px";
+  }
+  if (Prefs.get("panel.sidebarOff") && !$("#sidebar").classList.contains("off")) toggleSidebar();
+}
+
 let draftTimer = null;
 function saveDraft() {
   clearTimeout(draftTimer);
@@ -2163,6 +2208,7 @@ document.querySelectorAll(".vsplit,.hsplit").forEach((sp) => {
     const up = () => {
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
+      Prefs.set("panel." + sp.dataset.target, horiz ? target.offsetWidth : target.offsetHeight);
       diffVL.paint(true);
       commitVL.paint(true);
     };
@@ -2328,7 +2374,9 @@ document.addEventListener("keydown", (e) => {
 // ---------------------------------------------------------------------------
 (async function boot() {
   measureChar();
-  S.ov = await api("overview");
+  const [ov] = await Promise.all([api("overview"), Prefs.load()]);
+  S.ov = ov;
+  applyPanelPrefs(); // before the first paint, so nothing visibly jumps
   document.title = `${S.ov.name} — diffotator`;
   $("#repoName").textContent = S.ov.title || S.ov.name;
   $("#branchChip").textContent = "⑂ " + S.ov.branch;

@@ -652,6 +652,15 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.deepStrictEqual(back.collapsed, ["s|a.js"], "collapse persisted");
   D.saveDraft(root, {}); // nothing left → draft file removed
   assert.strictEqual(D.loadDraft(root), null, "empty draft is cleared");
+
+  // --- prefs: global UI state survives a restart, corruption degrades to {} --
+  assert.deepStrictEqual(D.loadPrefs(), {}, "no prefs yet is an empty object, not a crash");
+  D.savePrefs({ "panel.sidebar": 260, "panel.sidebarOff": true });
+  assert.deepStrictEqual(D.loadPrefs(), { "panel.sidebar": 260, "panel.sidebarOff": true }, "prefs round-trip");
+  D.savePrefs("nonsense"); // a bad payload must not poison the file
+  assert.deepStrictEqual(D.loadPrefs(), {}, "non-object prefs are stored as empty");
+  fs.writeFileSync(path.join(dir, "prefs.json"), "{corrupt");
+  assert.deepStrictEqual(D.loadPrefs(), {}, "corrupt prefs file degrades to defaults");
   delete process.env.DIFFOTATOR_DATA_DIR;
 }
 

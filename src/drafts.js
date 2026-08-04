@@ -64,6 +64,20 @@ function clearDraft(root) {
 }
 
 /**
+ * UI preferences — global, not per-repo: a pane width is a fact about your
+ * screen, not about the repository. Same disk-over-localStorage reasoning as
+ * drafts (every run binds a new random port). One flat JSON object; the
+ * client owns its keys.
+ */
+function loadPrefs() {
+  return readJson(path.join(dataDir(), "prefs.json")) || {};
+}
+
+function savePrefs(prefs) {
+  return writeJson(path.join(dataDir(), "prefs.json"), prefs && typeof prefs === "object" ? prefs : {});
+}
+
+/**
  * What the Stop hook remembers between turns: the fingerprint of the working
  * tree it last showed you. Without it, approving a review and letting the agent
  * say one more sentence would pop the browser straight back open.
@@ -76,4 +90,4 @@ function saveHookState(root, state) {
   return writeJson(fileFor(root, "hook"), { root, ...state, at: Date.now() });
 }
 
-module.exports = { dataDir, loadDraft, saveDraft, clearDraft, loadHookState, saveHookState };
+module.exports = { dataDir, loadDraft, saveDraft, clearDraft, loadPrefs, savePrefs, loadHookState, saveHookState };
