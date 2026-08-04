@@ -16,9 +16,15 @@ const MAX_DIFF_LINES = 200000;
 
 function git(cwd, args, opts = {}) {
   return new Promise((resolve, reject) => {
+    /* quotePath: left alone, git octal-escapes every non-ASCII path it prints,
+       so `rocket 🚀.md` comes back as `"rocket \360\237\232\200.md"` — wrong on
+       screen and, handed back to git, naming nothing. Every path this module
+       reads comes through here, so it is off once rather than unquoted at each
+       of the seven places that parse one. A path containing `"` or a control
+       byte is still quoted; that one needs `-z` at every call site. */
     execFile(
       "git",
-      ["--no-pager", ...args],
+      ["--no-pager", "-c", "core.quotePath=false", ...args],
       { cwd, maxBuffer: MAX_BUFFER, encoding: opts.buffer ? "buffer" : "utf8" },
       (err, stdout, stderr) => {
         if (err) {
@@ -112,10 +118,14 @@ async function listWorktrees(root) {
     if (line.startsWith("worktree ")) {
       cur = { path: line.slice(9), name: path.basename(line.slice(9)) };
       list.push(cur);
+    } else if (cur && line.startsWith("HEAD ")) {
+      /* A detached worktree has no branch, and the caller still has to be able
+         to ask git what it is looking at. It used to get the label "(detached)",
+         which is not a revision — git resolves it to nothing, and two detached
+         worktrees resolved to the same nothing. The sha is the honest answer. */
+      cur.head = line.slice(5);
     } else if (cur && line.startsWith("branch ")) {
       cur.branch = line.slice(7).replace("refs/heads/", "");
-    } else if (cur && line === "detached") {
-      cur.branch = "(detached)";
     }
   }
   return list;
@@ -340,9 +350,14 @@ function parseUnifiedDiff(text) {
   let newNo = 0;
   let inHunk = false;
   let binary = false;
+  let mode = null;
   for (const raw of text.split("\n")) {
     if (!inHunk) {
       if (raw.startsWith("Binary files") || raw.startsWith("GIT binary patch")) binary = true;
+      // A chmod produces no hunks at all, so a parser that reads only hunks
+      // renders the one reviewable fact — 100644 → 100755 — as +0/−0.
+      const mm = /^(old|new) mode (\d+)$/.exec(raw);
+      if (mm) (mode = mode || {})[mm[1]] = mm[2];
       const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
       if (m) {
         oldNo = +m[1];
@@ -359,14 +374,28 @@ function parseUnifiedDiff(text) {
       continue;
     }
     const c = raw[0];
-    const body = raw.slice(1).replace(/\r$/, "");
-    if (c === "+") rows.push({ t: "add", n: newNo++, s: body });
-    else if (c === "-") rows.push({ t: "del", o: oldNo++, s: body });
-    else if (c === " ") rows.push({ t: "ctx", o: oldNo++, n: newNo++, s: body });
-    else if (c === "\\") continue; // "\ No newline at end of file"
-    else if (raw === "") continue;
+    const cr = raw.endsWith("\r");
+    const body = raw.slice(1, cr ? -1 : undefined);
+    let row;
+    if (c === "+") row = { t: "add", n: newNo++, s: body };
+    else if (c === "-") row = { t: "del", o: oldNo++, s: body };
+    else if (c === " ") row = { t: "ctx", o: oldNo++, n: newNo++, s: body };
+    else {
+      // "\ No newline at end of file" is git describing the row above it. Drop
+      // it and adding a final newline reads as deleting a line and adding the
+      // same line back — a real change rendered as no change.
+      if (c === "\\" && rows.length) rows[rows.length - 1].nonl = 1;
+      continue;
+    }
+    // The \r has to leave the body — it renders as a stray glyph — but the row
+    // has to remember it, or a CRLF→LF conversion is three red lines beside
+    // three green ones of byte-identical text.
+    if (cr) row.cr = 1;
+    rows.push(row);
   }
-  return { rows, binary };
+  const out = { rows, binary };
+  if (mode && mode.old && mode.new && mode.old !== mode.new) out.mode = mode;
+  return out;
 }
 
 async function fileDiff(root, scope, file, context = 1000000) {

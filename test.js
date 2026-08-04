@@ -221,6 +221,7 @@ fs.writeFileSync(path.join(dir, "new.txt"), "hello\n");
 
   fs.rmSync(dir, { recursive: true, force: true });
   await awkwardShapes();
+  await gitFidelity();
   await draftsAndHook();
   await scopeKinds();
   await brokenAndEmptyRepos();
@@ -304,8 +305,84 @@ async function awkwardShapes() {
   fs.rmSync(d, { recursive: true, force: true });
 }
 
+/* git says more about a change than the paths and the +/− counts, and every one
+   of these facts used to be parsed away: the real bytes of a filename, the line
+   endings, the missing final newline, the file mode, and which revision a
+   detached worktree is actually on. A reviewer who cannot see them is being
+   shown a change that reads as no change. */
+async function gitFidelity() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-fidelity-"));
+  const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "pipe" }).toString();
+  const put = (p, s) => fs.writeFileSync(path.join(d, p), s);
+  g("init", "-q", "-b", "main");
+  g("config", "user.email", "t@t.t");
+  g("config", "user.name", "T");
 
+  const ROCKET = "rocket 🚀.md";
+  put(ROCKET, "hi\n");
+  put("crlf.txt", "one\r\ntwo\r\nthree\r\n");
+  put("nonl.txt", "no trailing newline here");
+  put("mode.txt", "unchanged\n");
+  g("add", "-A");
+  g("commit", "-qm", "root");
 
+  put(ROCKET, "hi\nthere\n");
+  put("crlf.txt", "one\ntwo\nthree\n");
+  put("nonl.txt", "no trailing newline here\nsecond line still no newline");
+  fs.chmodSync(path.join(d, "mode.txt"), 0o755);
+
+  const root = await G.repoRoot(d);
+  const wt = { type: "worktree" };
+
+  // git C-quotes and octal-escapes a non-ASCII path by default, and a path in
+  // that shape cannot be handed back to git — the file becomes unopenable.
+  const listed = (await G.changedFiles(root, wt)).map((f) => f.path);
+  assert.ok(listed.includes(ROCKET), `changed list carries the real path, got ${JSON.stringify(listed)}`);
+  assert.ok((await G.tree(root, wt)).includes(ROCKET), "and so does the tree, not just one of them");
+  const rocket = await G.fileDiff(root, wt, ROCKET);
+  assert.ok(rocket.rows.some((r) => r.t === "add" && r.s === "there"), "…and the path opens");
+
+  // CRLF → LF changes every line without changing a single glyph, so both sides
+  // of the diff render identically unless the row remembers the \r it lost.
+  const crlf = await G.fileDiff(root, wt, "crlf.txt");
+  const dels = crlf.rows.filter((r) => r.t === "del");
+  const adds = crlf.rows.filter((r) => r.t === "add");
+  assert.strictEqual(dels.length, 3, "three lines changed");
+  assert.deepStrictEqual(dels.map((r) => r.s), adds.map((r) => r.s), "both sides read the same text…");
+  assert.ok(dels.every((r) => r.cr), "…so the old side has to say it was CRLF");
+  assert.ok(adds.every((r) => !r.cr), "…and the new side has to say it is not");
+
+  // "\ No newline at end of file" is git describing the row above it; dropped,
+  // an added final newline reads as a deletion and addition of the same text.
+  const nonl = await G.fileDiff(root, wt, "nonl.txt");
+  assert.ok(nonl.rows.find((r) => r.t === "del").nonl, "old last line ended without a newline");
+  assert.ok(!nonl.rows.find((r) => r.t === "add" && r.s.startsWith("no trailing")).nonl, "its twin did not");
+  assert.ok(nonl.rows[nonl.rows.length - 1].nonl, "and the new last line ends without one too");
+
+  // A chmod is the whole change: there are no hunks to carry it, so a parser
+  // that only reads hunks shows the file as +0/−0 with nothing to review.
+  const mode = await G.fileDiff(root, wt, "mode.txt");
+  assert.deepStrictEqual(mode.mode, { old: "100644", new: "100755" }, "mode change survives parsing");
+  assert.strictEqual(mode.empty, true, "…and it is the only thing that changed");
+  assert.ok(!crlf.mode, "an ordinary edit reports no mode change");
+
+  // "(detached)" is a label for a human. Sent to git as a revision it resolves
+  // to nothing, and two detached worktrees would carry the same one.
+  const det = d + "-det";
+  g("worktree", "add", "-q", "--detach", det, "HEAD");
+  const { worktrees } = await G.overview(root);
+  const w = worktrees.find((x) => x.name === path.basename(det));
+  assert.ok(w, "detached worktree is listed");
+  assert.ok(!w.branch, "a detached worktree has no branch name to pass off as a revision");
+  assert.match(w.head, /^[0-9a-f]{7,}$/, "…it has a HEAD sha instead");
+  const revLog = await G.log(root, { rev: w.branch || w.head, limit: 5 });
+  assert.strictEqual(revLog.length, 1, "and that revision resolves to commits");
+  assert.strictEqual(worktrees[0].branch, "main", "an attached worktree still reports its branch");
+
+  g("worktree", "remove", "--force", det);
+  fs.rmSync(det, { recursive: true, force: true });
+  fs.rmSync(d, { recursive: true, force: true });
+}
 
 /* The Stop hook's whole risk is firing when it shouldn't, so the gate is the
    part that needs pinning down — not the browser it eventually opens. */
