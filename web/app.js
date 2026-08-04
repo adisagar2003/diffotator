@@ -75,8 +75,15 @@ const apiUrl = (path, params) => `/api/${path}?${new URLSearchParams(params)}`;
 async function api(path, params = {}, { cached = false } = {}) {
   const url = apiUrl(path, params);
   if (cached && cache.has(url)) return cache.get(url);
-  const p = fetch(url).then((r) => r.json());
-  if (cached) cache.set(url, p);
+  const p = fetch(url).then(async (r) => {
+    const body = await r.json();
+    if (!r.ok) throw new Error((body && body.error) || `request failed (${r.status})`);
+    return body;
+  });
+  if (cached) {
+    cache.set(url, p);
+    p.catch(() => cache.delete(url)); // a failure must not be replayed from cache
+  }
   return p;
 }
 /* One canonical string names a scope on the wire, in the request cache and in
@@ -404,18 +411,24 @@ const COMMIT_PAGE = 300;
 async function loadMoreCommits() {
   if (S.loadingMore || S.commitsDone) return;
   S.loadingMore = true;
-  const { commits } = await api("commits", {
-    limit: COMMIT_PAGE,
-    skip: S.commits.length,
-    ...(S.commitRev ? { rev: S.commitRev } : {}),
-  });
-  if (commits.length < COMMIT_PAGE) S.commitsDone = true;
-  if (commits.length) {
-    S.commits = S.commits.concat(commits);
-    S.graph = computeGraph(S.commits);
-    commitVL.refresh();
+  try {
+    // A failed page fetch must not take down the commit pane — leave the list
+    // as it was and let the next scroll tick try again.
+    const { commits } = await api("commits", {
+      limit: COMMIT_PAGE,
+      skip: S.commits.length,
+      ...(S.commitRev ? { rev: S.commitRev } : {}),
+    });
+    if (commits.length < COMMIT_PAGE) S.commitsDone = true;
+    if (commits.length) {
+      S.commits = S.commits.concat(commits);
+      S.graph = computeGraph(S.commits);
+      commitVL.refresh();
+    }
+  } catch {
+  } finally {
+    S.loadingMore = false;
   }
-  S.loadingMore = false;
 }
 $("#commitList").addEventListener(
   "scroll",
@@ -428,10 +441,17 @@ $("#commitList").addEventListener(
 
 async function loadCommits(select = true) {
   S.commitsDone = false;
-  const { commits } = await api("commits", {
-    limit: COMMIT_PAGE,
-    ...(S.commitRev ? { rev: S.commitRev } : {}),
-  });
+  let commits;
+  try {
+    // A failed side-panel fetch must not take down the page — leave whatever
+    // commit list was already on screen.
+    ({ commits } = await api("commits", {
+      limit: COMMIT_PAGE,
+      ...(S.commitRev ? { rev: S.commitRev } : {}),
+    }));
+  } catch {
+    return;
+  }
   if (commits.length < COMMIT_PAGE) S.commitsDone = true;
   S.commits = commits;
   S.graph = computeGraph(commits);
@@ -448,8 +468,12 @@ async function selectCommit(sha) {
   S.selCommit = sha;
   commitVL.refresh();
   setScope({ type: "commit", sha }, "Commit", true);
-  const { meta } = await api("commit", { sha }, { cached: true });
-  renderCommitDetail(meta);
+  try {
+    // A failed side-panel fetch must not take down the page — leave whatever
+    // commit detail was already showing.
+    const { meta } = await api("commit", { sha }, { cached: true });
+    renderCommitDetail(meta);
+  } catch {}
 }
 
 function renderCommitDetail(m) {
@@ -488,7 +512,14 @@ async function setScope(scope, name, keepCommits) {
   $("#scopeChip").textContent = Scope.label(scope);
   if (!keepCommits) collapseCommits(scope.type !== "commit");
   sidebar();
-  const { files } = await api("files", scopeParams(), { cached: true });
+  let files;
+  try {
+    ({ files } = await api("files", scopeParams(), { cached: true }));
+  } catch {
+    // The existing no-changes empty state is the fallback — better than a dead
+    // scope switch that leaves the previous scope's files on screen.
+    files = [];
+  }
   if (seq !== scopeSeq) return;
   S.files = files;
   render();
@@ -937,10 +968,17 @@ function stepFile(dir) {
 async function selectTreeFile(path) {
   S.selFile = path;
   renderFileTree();
-  const { full } = await api("file", { ...scopeParams(), file: path }, { cached: true });
-  if (S.selFile !== path) return;
-  S.treeRows = full && full.rows ? full.rows : null;
-  S.treeDiff = full;
+  try {
+    const { full } = await api("file", { ...scopeParams(), file: path }, { cached: true });
+    if (S.selFile !== path) return;
+    S.treeRows = full && full.rows ? full.rows : null;
+    S.treeDiff = full;
+  } catch (e) {
+    if (S.selFile !== path) return;
+    // renderTreeFile's existing meta.error branch renders "Could not read this file."
+    S.treeDiff = { error: String((e && e.message) || e) };
+    S.treeRows = null;
+  }
   renderDiff();
 }
 
@@ -1500,7 +1538,14 @@ function setTab(tab) {
  */
 async function loadTree() {
   const seq = scopeSeq;
-  const { paths } = await api("tree", scopeParams(), { cached: true });
+  let paths;
+  try {
+    // A failed side-panel fetch must not take down the page — leave whatever
+    // tree was already there and let the next tab click retry.
+    ({ paths } = await api("tree", scopeParams(), { cached: true }));
+  } catch {
+    return;
+  }
   if (seq !== scopeSeq) return;
   S.treePaths = paths;
   renderFileTree();
