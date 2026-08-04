@@ -192,6 +192,77 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.deepStrictEqual(RM.sideGroup(many.slice(0, 3), 300), { shown: many.slice(0, 3), badge: "3" });
   assert.strictEqual(RM.sideGroup([{}, {}]).badge, "2", "an uncapped group is still counted");
   assert.strictEqual(RM.sideGroup([]).badge, "0");
+/* --- keyboard focus contract -----------------------------------------------
+   The keydown handler needs a document, so the two decisions it kept getting
+   wrong live in web/keys.js and are asserted here. A helper with the right
+   answer is no use if app.js does not apply it, so the wiring — which only
+   exists as code in a file that cannot be loaded outside a browser — is pinned
+   by reading the source. */
+{
+  const K = require("./web/keys");
+  const app = fs.readFileSync(path.join(__dirname, "web", "app.js"), "utf8");
+
+  // Pressing `c` opened the comment box and then typed a "c" into it: the
+  // keystroke reached the textarea it had just focused. Only `case "/"`
+  // defaulted, so every other shortcut was one focus call away from the same
+  // bug. The handler owns them all now.
+  for (const k of K.SHORTCUTS) assert.strictEqual(K.shortcut({ key: k }), k, `${k} is a shortcut`);
+  for (const k of "c/") assert.ok(K.SHORTCUTS.includes(k), `${k} focuses a text box, so it must be owned`);
+  assert.strictEqual(K.shortcut({ key: "a" }), null, "an unbound key is left to the page");
+  assert.strictEqual(K.shortcut({ key: "ArrowDown" }), null, "arrows are handled before the switch");
+  assert.strictEqual(K.shortcut({ key: "" }), null, "no key is not a shortcut");
+  assert.strictEqual(K.shortcut({ key: "?" }), "?", "shift is not a modifier here — ? is shift+/");
+  // …but only unmodified, or defaulting them would eat the browser's own.
+  assert.strictEqual(K.shortcut({ key: "c", metaKey: true }), null, "⌘C copies, it does not comment");
+  assert.strictEqual(K.shortcut({ key: "f", ctrlKey: true }), null);
+  assert.strictEqual(K.shortcut({ key: "v", altKey: true }), null);
+  // One preventDefault for whatever the table owns, rather than one case
+  // remembering and the next forgetting.
+  assert.match(
+    app,
+    /const key = Keys\.shortcut\(e\);\s*if \(!key\) return;\s*e\.preventDefault\(\);/,
+    "the handler defaults every owned shortcut in one place"
+  );
+  assert.ok(!/case "\/":\s*\n\s*e\.preventDefault\(\)/.test(app), "…and no case defaults on its own");
+
+  // Escape has to release everything that can hold focus. It released four
+  // things and not the file filter, which `/` is the documented way into.
+  const shut = { popover: false, searchBar: false, modal: false, helpSheet: false, fileFilter: false };
+  assert.strictEqual(K.dismissTarget(shut), null, "nothing open, nothing to dismiss");
+  for (const id of K.DISMISS_ORDER) {
+    assert.strictEqual(K.dismissTarget({ ...shut, [id]: true }), id, `Escape releases ${id}`);
+  }
+  assert.ok(K.DISMISS_ORDER.includes("fileFilter"), "the filter is escapable at all");
+  assert.strictEqual(K.DISMISS_ORDER[K.DISMISS_ORDER.length - 1], "fileFilter", "…and last, being no overlay");
+  // Topmost first: a popover over the modal closes itself, and nothing is ever
+  // yanked out from under something drawn over it.
+  assert.strictEqual(K.dismissTarget({ ...shut, popover: true, modal: true, fileFilter: true }), "popover");
+  assert.strictEqual(K.dismissTarget({ ...shut, helpSheet: true, fileFilter: true }), "helpSheet");
+
+  // Every entry needs a close in app.js, or Escape names something the page
+  // cannot act on.
+  for (const id of K.DISMISS_ORDER) {
+    assert.match(app, new RegExp(`^\\s+${id}: \\w+,`, "m"), `app.js knows how to release ${id}`);
+  }
+  // …and every close hands focus back. Hiding an overlay with the caret still
+  // inside leaves document.activeElement on a box nobody can see, and the
+  // `typing` guard then swallows every shortcut after it.
+  const closers = [...app.matchAll(/function (close\w+)\(\) \{[\s\S]*?\n\}/g)];
+  assert.deepStrictEqual(
+    closers.map((m) => m[1]).sort(),
+    ["closeHelp", "closeModal", "closePopover", "closeSearch"],
+    "one named close per dismissal, so there is one place to get this right"
+  );
+  for (const [body, name] of closers) assert.match(body, /restoreFocus\(\)/, `${name} hands focus back`);
+  assert.ok(
+    !/return \(\$\("#(modal|helpSheet)"\)\.hidden = true\)/.test(app),
+    "no dismissal hides an overlay out from under the reader's focus"
+  );
+
+  // And the page has to load the policy, or every keystroke throws.
+  const html = fs.readFileSync(path.join(__dirname, "web", "index.html"), "utf8");
+  assert.match(html, /<script src="\/keys\.js"><\/script>/, "index.html loads keys.js");
+  assert.ok(html.indexOf("/keys.js") < html.indexOf("/app.js"), "…before app.js reads window.Keys");
 }
 
 // --- git layer against a throwaway repo ------------------------------------
@@ -251,6 +322,7 @@ fs.writeFileSync(path.join(dir, "new.txt"), "hello\n");
 
   fs.rmSync(dir, { recursive: true, force: true });
   await awkwardShapes();
+  await gitFidelity();
   await draftsAndHook();
   await scopeKinds();
   await brokenAndEmptyRepos();
@@ -334,8 +406,84 @@ async function awkwardShapes() {
   fs.rmSync(d, { recursive: true, force: true });
 }
 
+/* git says more about a change than the paths and the +/− counts, and every one
+   of these facts used to be parsed away: the real bytes of a filename, the line
+   endings, the missing final newline, the file mode, and which revision a
+   detached worktree is actually on. A reviewer who cannot see them is being
+   shown a change that reads as no change. */
+async function gitFidelity() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-fidelity-"));
+  const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "pipe" }).toString();
+  const put = (p, s) => fs.writeFileSync(path.join(d, p), s);
+  g("init", "-q", "-b", "main");
+  g("config", "user.email", "t@t.t");
+  g("config", "user.name", "T");
 
+  const ROCKET = "rocket 🚀.md";
+  put(ROCKET, "hi\n");
+  put("crlf.txt", "one\r\ntwo\r\nthree\r\n");
+  put("nonl.txt", "no trailing newline here");
+  put("mode.txt", "unchanged\n");
+  g("add", "-A");
+  g("commit", "-qm", "root");
 
+  put(ROCKET, "hi\nthere\n");
+  put("crlf.txt", "one\ntwo\nthree\n");
+  put("nonl.txt", "no trailing newline here\nsecond line still no newline");
+  fs.chmodSync(path.join(d, "mode.txt"), 0o755);
+
+  const root = await G.repoRoot(d);
+  const wt = { type: "worktree" };
+
+  // git C-quotes and octal-escapes a non-ASCII path by default, and a path in
+  // that shape cannot be handed back to git — the file becomes unopenable.
+  const listed = (await G.changedFiles(root, wt)).map((f) => f.path);
+  assert.ok(listed.includes(ROCKET), `changed list carries the real path, got ${JSON.stringify(listed)}`);
+  assert.ok((await G.tree(root, wt)).includes(ROCKET), "and so does the tree, not just one of them");
+  const rocket = await G.fileDiff(root, wt, ROCKET);
+  assert.ok(rocket.rows.some((r) => r.t === "add" && r.s === "there"), "…and the path opens");
+
+  // CRLF → LF changes every line without changing a single glyph, so both sides
+  // of the diff render identically unless the row remembers the \r it lost.
+  const crlf = await G.fileDiff(root, wt, "crlf.txt");
+  const dels = crlf.rows.filter((r) => r.t === "del");
+  const adds = crlf.rows.filter((r) => r.t === "add");
+  assert.strictEqual(dels.length, 3, "three lines changed");
+  assert.deepStrictEqual(dels.map((r) => r.s), adds.map((r) => r.s), "both sides read the same text…");
+  assert.ok(dels.every((r) => r.cr), "…so the old side has to say it was CRLF");
+  assert.ok(adds.every((r) => !r.cr), "…and the new side has to say it is not");
+
+  // "\ No newline at end of file" is git describing the row above it; dropped,
+  // an added final newline reads as a deletion and addition of the same text.
+  const nonl = await G.fileDiff(root, wt, "nonl.txt");
+  assert.ok(nonl.rows.find((r) => r.t === "del").nonl, "old last line ended without a newline");
+  assert.ok(!nonl.rows.find((r) => r.t === "add" && r.s.startsWith("no trailing")).nonl, "its twin did not");
+  assert.ok(nonl.rows[nonl.rows.length - 1].nonl, "and the new last line ends without one too");
+
+  // A chmod is the whole change: there are no hunks to carry it, so a parser
+  // that only reads hunks shows the file as +0/−0 with nothing to review.
+  const mode = await G.fileDiff(root, wt, "mode.txt");
+  assert.deepStrictEqual(mode.mode, { old: "100644", new: "100755" }, "mode change survives parsing");
+  assert.strictEqual(mode.empty, true, "…and it is the only thing that changed");
+  assert.ok(!crlf.mode, "an ordinary edit reports no mode change");
+
+  // "(detached)" is a label for a human. Sent to git as a revision it resolves
+  // to nothing, and two detached worktrees would carry the same one.
+  const det = d + "-det";
+  g("worktree", "add", "-q", "--detach", det, "HEAD");
+  const { worktrees } = await G.overview(root);
+  const w = worktrees.find((x) => x.name === path.basename(det));
+  assert.ok(w, "detached worktree is listed");
+  assert.ok(!w.branch, "a detached worktree has no branch name to pass off as a revision");
+  assert.match(w.head, /^[0-9a-f]{7,}$/, "…it has a HEAD sha instead");
+  const revLog = await G.log(root, { rev: w.branch || w.head, limit: 5 });
+  assert.strictEqual(revLog.length, 1, "and that revision resolves to commits");
+  assert.strictEqual(worktrees[0].branch, "main", "an attached worktree still reports its branch");
+
+  g("worktree", "remove", "--force", det);
+  fs.rmSync(det, { recursive: true, force: true });
+  fs.rmSync(d, { recursive: true, force: true });
+}
 
 /* The Stop hook's whole risk is firing when it shouldn't, so the gate is the
    part that needs pinning down — not the browser it eventually opens. */
@@ -649,6 +797,7 @@ async function httpSurface() {
   assert.strictEqual(await status("/"), 200);
   assert.strictEqual(await status("/scope.js"), 200, "the browser can load the shared scope vocabulary");
   assert.strictEqual(await status("/review-model.js"), 200);
+  assert.strictEqual(await status("/keys.js"), 200, "…and the keyboard policy it shares with the page");
   assert.strictEqual(await status("/%2e%2e%2fpackage.json"), 404, "static serving stays inside web/");
 
   // Submitting resolves the session promise; the server never touches teardown.
