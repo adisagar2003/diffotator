@@ -271,6 +271,22 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
     "a fileless focus keeps the old, file-blind behavior"
   );
 
+  /* Collapsing the file the cursor is in takes its rows out of the stream, and a
+     file-aware cursor then matches nothing — focusStep falls back to the first
+     row of the *whole* stream, which is a teleport to the top. app.js answers
+     this by re-anchoring the cursor (`refocusOutOf`), and `rowLine` is exported
+     for it: the app has to name a row it picked out of the stream itself. */
+  const folded = RM.buildStream({ ...base, selected: new Set(["a.js", "b.js"]), collapsed: new Set(["b.js"]) });
+  const firstRowAt = folded.items.findIndex((it) => it.k === "row");
+  assert.strictEqual(folded.items[firstRowAt].f, "a.js", "the first row of the folded stream is back in a.js");
+  assert.strictEqual(RM.focusStep(folded.items, from, 1).index, firstRowAt,
+    "a cursor in a collapsed file falls back to row 0 — the app must re-anchor it");
+  const firstRow = folded.items[firstRowAt];
+  assert.deepStrictEqual(RM.rowLine(firstRow), { side: "new", line: firstRow.u.r.n }, "rowLine names a row's line");
+  assert.strictEqual(RM.rowLine({ k: "fileHeader", f: "a.js" }), null, "…and only a row has one");
+  const delOnly = { k: "row", f: "a.js", u: { t: "del", l: { o: 7, s: "x" }, r: null } };
+  assert.deepStrictEqual(RM.rowLine(delOnly), { side: "old", line: 7 }, "a pure deletion is on the old side");
+
   // the v-loop walks only the selected stream
   const sel2 = ["a.js", "c.js"]; // b.js deselected
   assert.strictEqual(RM.nextUnviewed(sel2, "a.js", (p) => p === "a.js"), "c.js", "next unviewed skips deselected files");

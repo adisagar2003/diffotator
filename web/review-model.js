@@ -276,7 +276,9 @@
 
   const isChangeRow = (it) => !!it && it.k === "row" && it.u.t !== "ctx" && it.u.t !== "gap";
 
-  /** Which line a row stands for. The new side wins; a pure deletion has only the old. */
+  /** Which line a row stands for, as `{side, line}` or null. The new side wins;
+      a pure deletion has only the old. Exported because the app has to re-anchor
+      the line cursor on a row it picked out of the stream itself. */
   const rowLine = (it) =>
     it && it.k === "row"
       ? it.u.r && it.u.r.n != null
@@ -427,6 +429,7 @@
   exp.toSplit = toSplit;
   exp.buildItems = buildItems;
   exp.buildStream = buildStream;
+  exp.rowLine = rowLine;
   exp.rowLine = rowLine;
   exp.rowIndexFor = rowIndexFor;
   exp.findChange = findChange;

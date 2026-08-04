@@ -607,6 +607,7 @@ function setSelected(path, on) {
   const k = viewKey(path);
   on ? S.desel.delete(k) : S.desel.add(k);
   changed(); // render() → renderDiff() → buildItems() rebuilds the stream; no separate rebuild
+  if (!on) refocusOutOf(path);
   if (on) fetchStream(); // a newly selected file may not be loaded yet
 }
 function selectAll(on) {
@@ -615,6 +616,7 @@ function selectAll(on) {
     on ? S.desel.delete(k) : S.desel.add(k);
   }
   changed();
+  if (!on && S.focus) refocusOutOf(S.focus.file);
   if (on) fetchStream();
 }
 const isCollapsed = (path) => S.collapsed.has(viewKey(path));
@@ -624,7 +626,32 @@ function setCollapsed(path, on) {
   // Folding a file away moves every segment after it, so the sticky header has
   // to be told; `rebuildStream` is the one path that keeps all of that in step.
   rebuildStream();
+  if (on) refocusOutOf(path);
   saveDraft();
+}
+
+/**
+ * The line cursor cannot stay in a file whose rows just left the stream — a
+ * collapse or a deselect. `focusStep` would match nothing, fall back to row 0
+ * and teleport the reader to the top of the stream on the next arrow key, which
+ * is exactly the `v`-then-↓ flow. Re-anchor on the first row *after* where the
+ * file was, which is where `v` is taking them anyway; if the file is gone
+ * entirely (deselected, so there is no header left to measure from) there is no
+ * honest place below it, so drop the cursor and let the next arrow start over.
+ */
+function refocusOutOf(path) {
+  if (!S.focus || S.focus.file !== path) return;
+  const seg = S.segments.find((s) => s.file === path);
+  if (seg) {
+    for (let i = seg.end; i < S.items.length; i++) {
+      const l = S.items[i].k === "row" ? RM.rowLine(S.items[i]) : null;
+      if (l) {
+        S.focus = { file: S.items[i].f, side: l.side, line: l.line };
+        return;
+      }
+    }
+  }
+  S.focus = null;
 }
 
 function renderProgress() {
@@ -786,6 +813,7 @@ function rebuildStream() {
   buildItems();
   diffVL.refresh();
   renderProgress();
+  revalidatePin(); // heights moved: the pin may no longer describe anything
   updateStickyHeader(true); // a file arriving can move both the top file and the count
 }
 
@@ -811,25 +839,52 @@ function scrollToFile(path) {
   updateStickyHeader(true);
 }
 
-/**
- * Every jump in this file can fall short of what it aimed at: the pane cannot
- * scroll past total − clientHeight, so landing in the last file, when that file
- * is shorter than the viewport, still leaves an earlier segment at the top.
- * `topIndex()` would then name the wrong file, `updateStickyHeader` would
- * overwrite the `S.selFile` the jump just set, and `v` would mark a file the
- * reader never looked at. So whoever scrolled says which file they *meant*, and
- * the header honors that pin until the reader scrolls for themselves — the
- * scroll listener releases it the moment scrollTop moves off `pinExpectedTop`.
- */
-function pinAfterScroll(file) {
+/* --- the header pin -------------------------------------------------------
+   Every jump in this file can fall short of what it aimed at: the pane cannot
+   scroll past total − clientHeight, so landing in the last file, when that file
+   is shorter than the viewport, still leaves an earlier segment at the top.
+   `topIndex()` would then name the wrong file, `updateStickyHeader` would
+   overwrite the `S.selFile` the jump just set, and `v` would mark a file the
+   reader never looked at. So whoever scrolled says which file they *meant*, and
+   the header honors that pin until the reader scrolls for themselves — the
+   scroll listener releases it the moment scrollTop moves off `pinExpectedTop`.
+   Three rules keep it honest: only pin when the pane cannot do better
+   (`pinHolds`), always repaint when the pin changes (`setPin`), and re-test it
+   whenever heights move (`revalidatePin`). */
+
+/** Does `file` still need a pin? Only when the pane is bottomed out — that is
+    the one place a target cannot climb any higher. Anywhere else a jump that did
+    not reach the top simply scrolled where it was asked to (centered, say), and
+    the viewport is right. */
+function pinHolds(file) {
   const body = $("#diffBody");
-  S.pinExpectedTop = body.scrollTop; // read back: the browser clamps it
   const seg = file ? S.segments.find((s) => s.file === file) : null;
-  /* Only when the pane is bottomed out — that is the one place a target cannot
-     climb any higher. Anywhere else a jump that did not reach the top simply
-     scrolled where it was asked to (centered, say), and the viewport is right. */
   const atEnd = body.scrollTop >= body.scrollHeight - body.clientHeight - 1;
-  S.pinnedSeg = seg && atEnd && segmentAt(diffVL.topIndex()) !== seg ? file : null;
+  return !!seg && atEnd && segmentAt(diffVL.topIndex()) !== seg;
+}
+
+/** Set (or drop) the pin and repaint. The repaint is not optional: a jump that
+    did not move `scrollTop` — the pane was already bottomed out — fires no
+    scroll event, so nothing else would ever tell the header, and `v` would go
+    on marking the file the viewport happens to start in. */
+function setPin(file) {
+  S.pinExpectedTop = $("#diffBody").scrollTop; // read back: the browser clamps it
+  if (S.pinnedSeg === (file || null)) return;
+  S.pinnedSeg = file || null;
+  updateStickyHeader(true);
+}
+
+function pinAfterScroll(file) {
+  setPin(pinHolds(file) ? file : null);
+}
+
+/** Heights moved under the pin — a late file arriving above the viewport, a fold
+    opening — without any scroll event to release it, and the pinned file may now
+    be off screen entirely. Re-run its own test rather than trust it. */
+function revalidatePin() {
+  if (!S.pinnedSeg) return;
+  if (!pinHolds(S.pinnedSeg)) setPin(null);
+  else S.pinExpectedTop = $("#diffBody").scrollTop; // reflow may have moved it
 }
 
 /** j/k: one file along, in the order the reader is actually looking at.
@@ -1114,6 +1169,7 @@ function renderDiff() {
   }
   /* Not only on scroll: at boot nothing has scrolled yet, and after a rebuild
      the position counter and the file at the top can both have moved. */
+  revalidatePin();
   updateStickyHeader(true);
 }
 
@@ -1248,8 +1304,9 @@ $("#diffBody").addEventListener("click", (e) => {
     const st = S.perFile.get(fold.dataset.file);
     if (!st) return;
     st.expanded.add(fold.dataset.fold);
-    buildItems();
-    diffVL.refresh();
+    // Opening a fold grows the stream, which can invalidate a header pin — the
+    // one rebuild path knows that; buildItems + refresh on their own did not.
+    rebuildStream();
     return;
   }
   const del = e.target.closest("[data-del]");
