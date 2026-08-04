@@ -341,6 +341,37 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   const loading = RM.buildStream({ files, selected: sel, collapsed: new Set(), perFile: pf2 });
   assert.ok(RM.firstChangeRowIn(loading.items, loading.segments, "b.js") === null, "unloaded file → null");
   assert.ok(RM.firstChangeRowIn(reading.items, reading.segments, "zzz.js") === null, "unknown file → null");
+
+  // firstRowFrom: where an arrow key should land the cursor when it has no
+  // real position yet but a pending-focus file names where the reader is.
+  const fromB = RM.firstRowFrom(reading.items, reading.segments, "b.js");
+  assert.ok(fromB >= reading.segments[1].start && fromB < reading.segments[1].end, "lands inside b.js's own segment when it has rows");
+  assert.deepStrictEqual(RM.rowLine(reading.items[fromB]), { side: "new", line: 1 }, "…on its first row, ctx included (not just changes)");
+  assert.strictEqual(RM.firstRowFrom(loading.items, loading.segments, "b.js"), -1, "b.js still loading, nothing after it → -1");
+  assert.strictEqual(RM.firstRowFrom(reading.items, reading.segments, "zzz.js"), -1, "unknown file → -1");
+
+  // A pending file that never gets a segment of its own to stand on scans past
+  // it into whatever comes next, rather than giving up at the segment's own end.
+  const files3 = [...files, { path: "c.js", additions: 1, deletions: 0 }];
+  const sel3 = new Set(["a.js", "b.js", "c.js"]);
+  const pf3 = new Map([
+    ["a.js", { loaded: true, rows, expanded: new Set(), full: false }],
+    ["c.js", { loaded: true, rows, expanded: new Set(), full: false }],
+  ]);
+  const skip = RM.buildStream({ files: files3, selected: sel3, collapsed: new Set(), perFile: pf3 });
+  const fromBpastC = RM.firstRowFrom(skip.items, skip.segments, "b.js");
+  const segC = skip.segments[2];
+  assert.ok(fromBpastC >= segC.start && fromBpastC < segC.end, "b.js has no rows of its own → scan continues into c.js");
+
+  // focusStep honors that anchor: forward lands exactly on it instead of on
+  // row 0 of the whole stream (the teleport this exists to prevent).
+  const anchored = RM.focusStep(reading.items, null, 1, fromB);
+  assert.deepStrictEqual({ side: anchored.side, line: anchored.line }, { side: "new", line: 1 }, "anchorIndex seeds the step so dir=1 lands on it");
+  assert.deepStrictEqual(
+    RM.focusStep(reading.items, null, 1),
+    RM.focusStep(reading.items, null, 1, -1),
+    "a negative/absent anchorIndex is a no-op — same as today's rows[0] fallback"
+  );
 }
 
 /* --- keyboard focus contract -----------------------------------------------

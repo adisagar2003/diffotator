@@ -333,8 +333,14 @@
    * `focus.file` is optional but matters in a stream: line numbers repeat across
    * files, so a cursor that does not say which file it is in would re-anchor on
    * the first file with that line number and step from there.
+   *
+   * `anchorIndex` (item index, optional) stands in for a real focus when there
+   * isn't one yet: the cursor is treated as resting just *before* that row, so
+   * stepping forward lands on it instead of on row 0 of the whole stream. Used
+   * when a pending-focus file (armed by `v` on a still-fetching file) names
+   * where the reader actually is.
    */
-  function focusStep(items, focus, dir) {
+  function focusStep(items, focus, dir, anchorIndex) {
     const rows = [];
     for (let i = 0; i < items.length; i++) if (items[i].k === "row") rows.push(i);
     if (!rows.length) return null;
@@ -345,6 +351,9 @@
         const l = rowLine(items[i]);
         return l && l.side === focus.side && l.line === focus.line;
       });
+    } else if (anchorIndex != null && anchorIndex >= 0) {
+      const ai = rows.indexOf(anchorIndex);
+      if (ai >= 0) at = ai - 1;
     }
     // No cursor yet → land on the first row rather than stepping from nowhere.
     const pos = at < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, at + dir));
@@ -395,6 +404,21 @@
       }
     }
     return null;
+  }
+
+  /** Index of the first `row` item at or after `file`'s segment start, scanning
+      past the segment's own end into later files if `file` itself is still
+      loading (no rows yet). -1 when `file` has no segment or nothing after it
+      is a row either (e.g. every remaining file is also still loading). Lets
+      the line cursor step from "resting on a still-fetching file" without
+      snapping back to the top of the whole stream. */
+  function firstRowFrom(items, segments, file) {
+    const seg = segments.find((s) => s.file === file);
+    if (!seg) return -1;
+    for (let i = seg.start; i < items.length; i++) {
+      if (items[i].k === "row") return i;
+    }
+    return -1;
   }
 
   // --- commit graph --------------------------------------------------------
@@ -460,5 +484,6 @@
   exp.searchHits = searchHits;
   exp.nextUnviewed = nextUnviewed;
   exp.firstChangeRowIn = firstChangeRowIn;
+  exp.firstRowFrom = firstRowFrom;
   exp.computeGraph = computeGraph;
 })(typeof module === "object" && module.exports ? module.exports : (window.RM = {}));

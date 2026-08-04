@@ -485,6 +485,7 @@ async function setScope(scope, name, keepCommits) {
   S.segments = [];
   S.pinnedSeg = null; // a new scope can repeat a path; the old pin means nothing
   S.focus = null; // …and the line cursor was pointing into the old stream
+  S.pendingFocusFile = null; // …and any armed promotion was waiting on the old stream too
   S.treePaths = null;
   $("#scopeChip").textContent = Scope.label(scope);
   if (!keepCommits) collapseCommits(scope.type !== "commit");
@@ -871,10 +872,7 @@ function rebuildStream() {
   renderProgress();
   revalidatePin(); // heights moved: the pin may no longer describe anything
   updateStickyHeader(true); // a file arriving can move both the top file and the count
-  if (S.pendingFocusFile) {
-    const st = S.perFile.get(S.pendingFocusFile);
-    if (st && st.loaded) anchorFocusIn(S.pendingFocusFile);
-  }
+  promotePendingFocus();
 }
 
 /** Sidebar click / j/k target: make sure it's in the stream, then go there. */
@@ -1124,8 +1122,8 @@ const ROW_HTML = {
   /** The review's finish line — appears when every selected file is viewed. */
   allviewed(item, top) {
     return `<div class="avc" style="top:${top}px">
-      <div class="av-title">All ${item.n} file${item.n === 1 ? "" : "s"} viewed 🎉</div>
-      <div class="av-sub">${item.comments ? `${item.comments} comment${item.comments === 1 ? "" : "s"} drafted` : "No comments drafted"}</div>
+      <div class="av-title">All ${item.n} file${item.n === 1 ? "" : "s"} viewed</div>
+      ${item.comments ? `<div class="av-sub">${item.comments} comment${item.comments === 1 ? "" : "s"} drafted</div>` : ""}
       <div class="av-act">${
         item.comments
           ? `<button data-finish-send>Send feedback</button><span class="av-hint">⌘⏎</span>`
@@ -1498,8 +1496,12 @@ $("#searchClose").onclick = closeSearch;
 
 /* A line cursor so a review can be driven without ever reaching for the mouse. */
 function moveFocus(dir) {
+  /* No real cursor yet, but `v` armed a pending anchor on a file that's still
+     fetching — the reader's attention is on that file (spec 1a), so step from
+     its first available row instead of restarting at row 0 of the stream. */
+  const anchorIndex = !S.focus && S.pendingFocusFile ? RM.firstRowFrom(S.items, S.segments, S.pendingFocusFile) : -1;
   S.pendingFocusFile = null; // moving the cursor by hand cancels any pending anchor
-  const next = RM.focusStep(S.items, S.focus, dir);
+  const next = RM.focusStep(S.items, S.focus, dir, anchorIndex);
   if (!next) return;
   /* The row's own file, not `S.selFile`: stepping off the end of one file lands
      in the next one before the sticky header has caught up with the scroll. */
@@ -1512,7 +1514,7 @@ function moveFocus(dir) {
 /** Land the cursor on the first change of `path` — the row the viewport just
     scrolled to — so the next n/↓ continues from what the reader is looking at.
     A still-loading segment has no honest row yet; remember the intent and
-    rebuildStream promotes it when the rows arrive. */
+    promotePendingFocus (called from rebuildStream) resolves it once. */
 function anchorFocusIn(path) {
   const hit = RM.firstChangeRowIn(S.items, S.segments, path);
   if (hit) {
@@ -1523,6 +1525,27 @@ function anchorFocusIn(path) {
     S.focus = null;
     S.pendingFocusFile = path;
   }
+}
+
+/** Resolve an armed `S.pendingFocusFile` exactly once, from `rebuildStream`.
+    One-shot: the moment the pending file is loaded, the anchor is consumed
+    (cleared) before anything else runs, whether or not it finds a row — a
+    loaded-but-rowless file (binary/empty/mode-only note) will never grow one,
+    so retrying on every future rebuild would just repeat the same miss. That
+    matters because a miss must never touch `S.focus`: by the time the retry
+    would have fired, the reader may have set it some other way (a gutter
+    click via openPopover, a jump from the comments panel) — this path only
+    ever sets `S.focus` on a genuine hit, never clears it. */
+function promotePendingFocus() {
+  const path = S.pendingFocusFile;
+  if (!path) return;
+  const st = S.perFile.get(path);
+  if (!st || !st.loaded) return; // still fetching — leave the anchor armed
+  S.pendingFocusFile = null; // consume now: loaded means this is the one shot
+  const hit = RM.firstChangeRowIn(S.items, S.segments, path);
+  if (!hit) return; // loaded but rowless — nothing to promote to, ever
+  S.focus = { file: path, side: hit.side, line: hit.line };
+  diffVL.refresh(); // repaint the focus ring
 }
 
 /** Comment on the focused line, scrolling it into the DOM first if needed. */
