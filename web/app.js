@@ -749,6 +749,12 @@ function rebuildStream() {
 function scrollToFile(path) {
   if (S.tab === "tree") return selectTreeFile(path);
   if (!isSelected(path)) return setSelected(path, true), scrollToFile(path);
+  /* Nothing else guarantees the stream matches this tab: the File Tree branch
+     of buildItems() clears the segments, setTab rebuilds nothing, and at boot
+     renderDiff returns before buildItems while there is no selected file. An
+     empty list here means stale state, not "no such file" — rebuild rather
+     than swallow the click. */
+  if (!S.segments.length) buildItems();
   const seg = S.segments.find((s) => s.file === path);
   if (!seg) return;
   S.selFile = path;
