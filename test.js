@@ -296,6 +296,84 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.strictEqual(RM.nextUnviewed(sel2, "a.js", (p) => p === "a.js"), "c.js", "next unviewed skips deselected files");
 }
 
+// --- allviewed finish item + firstChangeRowIn ------------------------------
+{
+  const files = [
+    { path: "a.js", additions: 1, deletions: 0 },
+    { path: "b.js", additions: 1, deletions: 0 },
+  ];
+  const rows = [
+    { t: "ctx", o: 1, n: 1, s: "one" },
+    { t: "add", n: 2, s: "two" },
+  ];
+  const pf = new Map([
+    ["a.js", { loaded: true, rows, expanded: new Set(), full: false }],
+    ["b.js", { loaded: true, rows, expanded: new Set(), full: false }],
+  ]);
+  const sel = new Set(["a.js", "b.js"]);
+
+  const done = RM.buildStream({
+    files, selected: sel, collapsed: new Set(sel), perFile: pf,
+    annotations: [{ file: "a.js", side: "new", line: 2, body: "x" }],
+    viewedSet: new Set(sel),
+  });
+  const last = done.items[done.items.length - 1];
+  assert.ok(last.k === "allviewed", "all viewed + all folded → finish item appended last");
+  assert.ok(last.n === 2 && last.comments === 1, "finish item carries file and comment counts");
+  assert.ok(done.segments.length === 2, "finish item is not a segment");
+
+  const reading = RM.buildStream({ files, selected: sel, collapsed: new Set(), perFile: pf, viewedSet: new Set(sel) });
+  assert.ok(!reading.items.some((it) => it.k === "allviewed"), "a file unfolded → still reading, no finish item");
+
+  const part = RM.buildStream({ files, selected: sel, collapsed: new Set(["a.js"]), perFile: pf, viewedSet: new Set(["a.js"]) });
+  assert.ok(!part.items.some((it) => it.k === "allviewed"), "one unviewed file → no finish item");
+
+  const none = RM.buildStream({ files, selected: new Set(), collapsed: new Set(), perFile: pf, viewedSet: new Set() });
+  assert.ok(!none.items.some((it) => it.k === "allviewed"), "empty selection → no finish item");
+
+  assert.ok(RM.itemHeight({ k: "allviewed" }, 80) === RM.GEOM.allViewed, "allviewed row uses its GEOM height");
+
+  const hit = RM.firstChangeRowIn(reading.items, reading.segments, "b.js");
+  assert.ok(hit && hit.side === "new" && hit.line === 2, "firstChangeRowIn skips ctx, finds the add");
+  assert.ok(reading.items[hit.index].f === "b.js", "firstChangeRowIn stays inside the file");
+
+  const pf2 = new Map([["a.js", { loaded: true, rows, expanded: new Set(), full: false }]]);
+  const loading = RM.buildStream({ files, selected: sel, collapsed: new Set(), perFile: pf2 });
+  assert.ok(RM.firstChangeRowIn(loading.items, loading.segments, "b.js") === null, "unloaded file → null");
+  assert.ok(RM.firstChangeRowIn(reading.items, reading.segments, "zzz.js") === null, "unknown file → null");
+
+  // firstRowFrom: where an arrow key should land the cursor when it has no
+  // real position yet but a pending-focus file names where the reader is.
+  const fromB = RM.firstRowFrom(reading.items, reading.segments, "b.js");
+  assert.ok(fromB >= reading.segments[1].start && fromB < reading.segments[1].end, "lands inside b.js's own segment when it has rows");
+  assert.deepStrictEqual(RM.rowLine(reading.items[fromB]), { side: "new", line: 1 }, "…on its first row, ctx included (not just changes)");
+  assert.strictEqual(RM.firstRowFrom(loading.items, loading.segments, "b.js"), -1, "b.js still loading, nothing after it → -1");
+  assert.strictEqual(RM.firstRowFrom(reading.items, reading.segments, "zzz.js"), -1, "unknown file → -1");
+
+  // A pending file that never gets a segment of its own to stand on scans past
+  // it into whatever comes next, rather than giving up at the segment's own end.
+  const files3 = [...files, { path: "c.js", additions: 1, deletions: 0 }];
+  const sel3 = new Set(["a.js", "b.js", "c.js"]);
+  const pf3 = new Map([
+    ["a.js", { loaded: true, rows, expanded: new Set(), full: false }],
+    ["c.js", { loaded: true, rows, expanded: new Set(), full: false }],
+  ]);
+  const skip = RM.buildStream({ files: files3, selected: sel3, collapsed: new Set(), perFile: pf3 });
+  const fromBpastC = RM.firstRowFrom(skip.items, skip.segments, "b.js");
+  const segC = skip.segments[2];
+  assert.ok(fromBpastC >= segC.start && fromBpastC < segC.end, "b.js has no rows of its own → scan continues into c.js");
+
+  // focusStep honors that anchor: forward lands exactly on it instead of on
+  // row 0 of the whole stream (the teleport this exists to prevent).
+  const anchored = RM.focusStep(reading.items, null, 1, fromB);
+  assert.deepStrictEqual({ side: anchored.side, line: anchored.line }, { side: "new", line: 1 }, "anchorIndex seeds the step so dir=1 lands on it");
+  assert.deepStrictEqual(
+    RM.focusStep(reading.items, null, 1),
+    RM.focusStep(reading.items, null, 1, -1),
+    "a negative/absent anchorIndex is a no-op — same as today's rows[0] fallback"
+  );
+}
+
 /* --- buildStream: per-file memoization --------------------------------------
    Every arrival used to rebuild every OTHER loaded file's rows too, so filling
    a large stream did quadratic work. buildStream now caches each file's body
