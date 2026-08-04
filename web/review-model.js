@@ -540,9 +540,28 @@
     return { type: "range", base: t.base, head: t.sel };
   }
 
+  /**
+   * Which commit tag an annotation should carry, or null for none. Tagged at
+   * creation, never re-tagged: an existing annotation keeps its tag whatever
+   * scope it is edited from, and a new one is tagged exactly when it is
+   * written against a single commit's diff. `meta` is that commit's metadata
+   * if already fetched; the tag degrades gracefully without it.
+   */
+  function annCommit(existing, scope, meta) {
+    if (existing) return existing.commit || null;
+    if (!scope || scope.type !== "commit") return null;
+    const m = meta && meta.sha === scope.sha ? meta : null;
+    return {
+      sha: scope.sha,
+      short: m ? m.short : String(scope.sha).slice(0, 7),
+      subject: m ? m.subject : "",
+    };
+  }
+
   exp.GEOM = GEOM;
   exp.timelineRows = timelineRows;
   exp.timelineScope = timelineScope;
+  exp.annCommit = annCommit;
   exp.annKey = annKey;
   exp.annIndex = annIndex;
   exp.commentLines = commentLines;

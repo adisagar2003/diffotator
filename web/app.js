@@ -523,18 +523,22 @@ async function syncTimeline(scope) {
   const head = scope.head || "HEAD";
   S.tl = { base: scope.base, head, commits: null, sel: null, mode: (S.tl && S.tl.mode) || "upto" };
   renderTimeline();
-  const seq = scopeSeq;
   let commits;
   try {
     // A failed side-panel fetch must not take down the review — the panel just
     // stays empty and the full-range row still describes what is on screen.
     // first-parent: the branch's own story — a merge is one row, not the
-    // spilled contents of whatever it brought in.
-    ({ commits } = await api("commits", { rev: `${scope.base}..${head}`, limit: 500, firstParent: 1 }, { cached: true }));
+    // spilled contents of whatever it brought in. Uncached on purpose: the
+    // branch can gain commits mid-session, like the top pane's list.
+    ({ commits } = await api("commits", { rev: `${scope.base}..${head}`, limit: 500, firstParent: 1 }));
   } catch {
     return;
   }
-  if (seq !== scopeSeq || !S.tl || S.tl.base !== scope.base) return; // scope moved on mid-fetch
+  /* Guard on the range, not on scopeSeq: navigating *within* the timeline bumps
+     the seq without re-anchoring, and a click racing this fetch must not throw
+     the commits away — that left the panel empty for good. Only a different
+     anchor (new range, or the panel gone) invalidates the result. */
+  if (!S.tl || S.tl.base !== scope.base || S.tl.head !== head) return;
   S.tl.commits = commits.slice().reverse(); // git speaks newest-first; a story reads oldest-first
   renderTimeline();
 }
@@ -561,6 +565,7 @@ $("#timeline").addEventListener("click", (e) => {
   const row = e.target.closest("[data-tlsha]");
   const all = e.target.closest("[data-tlall]");
   if (!row && !all) return;
+  bannerDismissed = null; // a timeline click is as explicit as a top-pane one
   // Re-clicking the selected commit steps back out to the full branch.
   const sha = row && S.tl.sel !== row.dataset.tlsha ? row.dataset.tlsha : null;
   S.tl.sel = sha;
@@ -1965,21 +1970,11 @@ function savePopover() {
     code: $("#popCode").textContent,
     lang: extOf(p.file),
   };
-  /* Tagged at creation, not at send or edit: a comment written against one
-     commit's diff stays that commit's comment — flipping the timeline toggle
-     or editing it later from another scope must not silently retag it. The
-     line anchor lives in the diff it was written against, so the sha is what
-     keeps it meaningful elsewhere. */
+  // Tagged at creation, never re-tagged — the rule lives in RM.annCommit so
+  // node test.js can hold it.
   const i = S.ann.findIndex((a) => a.id === rec.id);
-  if (i >= 0 && S.ann[i].commit) rec.commit = S.ann[i].commit;
-  else if (i < 0 && S.scope.type === "commit") {
-    const m = S.commitMeta && S.commitMeta.sha === S.scope.sha ? S.commitMeta : null;
-    rec.commit = {
-      sha: S.scope.sha,
-      short: m ? m.short : String(S.scope.sha).slice(0, 7),
-      subject: m ? m.subject : "",
-    };
-  }
+  const tag = RM.annCommit(i >= 0 ? S.ann[i] : null, S.scope, S.commitMeta);
+  if (tag) rec.commit = tag;
   if (i >= 0) S.ann[i] = rec;
   else S.ann.push(rec);
   changed();

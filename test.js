@@ -74,6 +74,23 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
     { type: "commit", sha: "abc123" },
     "this-commit narrows to the commit alone"
   );
+
+  // Tag at creation, never re-tag.
+  const meta = { sha: "abc123", short: "abc123x", subject: "feat: x" };
+  assert.deepStrictEqual(
+    RM.annCommit(null, { type: "commit", sha: "abc123" }, meta),
+    { sha: "abc123", short: "abc123x", subject: "feat: x" },
+    "new comment in a commit scope is tagged"
+  );
+  assert.strictEqual(RM.annCommit(null, { type: "range", base: "b" }, meta), null, "range comments carry nothing");
+  assert.deepStrictEqual(
+    RM.annCommit(null, { type: "commit", sha: "ffff123" }, meta),
+    { sha: "ffff123", short: "ffff123", subject: "" },
+    "stale metadata degrades to the sha alone"
+  );
+  const kept = { commit: { sha: "old", short: "old", subject: "s" } };
+  assert.strictEqual(RM.annCommit(kept, { type: "commit", sha: "abc123" }, meta), kept.commit, "edits keep the original tag");
+  assert.strictEqual(RM.annCommit({ id: "a1" }, { type: "commit", sha: "abc123" }, meta), null, "an untagged comment stays untagged through edits");
 }
 
 // --- highlighter + word diff -----------------------------------------------
