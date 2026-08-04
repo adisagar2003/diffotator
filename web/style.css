@@ -187,7 +187,7 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 
 /* ---------- diff ---------- */
 .diff-header{
-  height:29px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 10px;
+  height:32px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 10px;
   background:var(--panel);border-bottom:1px solid var(--border);font-size:12px;color:var(--text-dim);
   white-space:nowrap;overflow:hidden
 }
@@ -202,6 +202,13 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .diff-header .grow{flex:1}
 .diff-header .nav{display:flex;gap:2px}
 .diff-header .nav button{width:22px;height:20px;border-radius:4px;border:1px solid var(--border);background:var(--elev);cursor:pointer;font-size:10px;padding:0}
+.diff-header .caret{width:11px;flex:0 0 auto;color:var(--muted);font-size:9px;cursor:pointer}
+.diff-header .caret:hover{color:var(--text)}
+.diff-header .shbox{cursor:pointer;flex:0 0 auto;font-size:11px;opacity:.8}
+.diff-header .shbox:hover{opacity:1}
+.diff-header .shbox.on{color:var(--accent)}
+.diff-header .fp{cursor:pointer}
+.diff-header .fp:hover b{text-decoration:underline}
 
 .searchbar{
   display:flex;align-items:center;gap:5px;padding:4px 8px;background:var(--elev);

@@ -1330,8 +1330,12 @@ function updateStickyHeader(force) {
   }
   const f = S.files.find((x) => x.path === seg.file) || {};
   const i = S.segments.indexOf(seg);
+  const collapsed = isCollapsed(seg.file);
+  const viewed = isViewed(seg.file);
   head.innerHTML = `
-    <span class="fp" title="${esc(seg.file)}"><b>${esc(seg.file)}</b></span>
+    <span class="caret" data-shfold title="${collapsed ? "Expand" : "Collapse"} this file">${collapsed ? "▸" : "▾"}</span>
+    <span class="shbox${viewed ? " on" : ""}" data-shviewed title="Mark viewed — does not fold the file">${viewed ? "☑" : "☐"}</span>
+    <span class="fp" data-shjump title="${esc(seg.file)} — click to jump to the top of this file"><b>${esc(seg.file)}</b></span>
     <span class="plus">+${f.additions ?? 0}</span><span class="minus">−${f.deletions ?? 0}</span>
     <span class="grow"></span>
     <span class="pos">${i + 1} of ${S.segments.length}</span>
@@ -1395,7 +1399,14 @@ $("#diffBody").addEventListener("click", (e) => {
 
 $("#diffHeader").addEventListener("click", (e) => {
   const b = e.target.closest("[data-nav]");
-  if (b) jumpChange(b.dataset.nav === "next" ? 1 : -1);
+  if (b) return jumpChange(b.dataset.nav === "next" ? 1 : -1);
+  // The three mini-header controls act on the file the bar names. The tree
+  // tab's header sets dataset.file = "" and has none of these controls.
+  const file = $("#diffHeader").dataset.file;
+  if (!file) return;
+  if (e.target.closest("[data-shfold]")) return setCollapsed(file, !isCollapsed(file));
+  if (e.target.closest("[data-shviewed]")) return setViewed(file, !isViewed(file)); // viewed only — v's auto-fold stays on v
+  if (e.target.closest("[data-shjump]")) return scrollToFile(file);
 });
 
 function jumpChange(dir) {
