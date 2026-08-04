@@ -384,13 +384,19 @@ async function draftsAndHook() {
 
     assert.strictEqual(minFilesFor("abc"), 3, "a value we cannot read falls back to the default");
     assert.strictEqual(minFilesFor("Infinity"), 3, "…as does one no repository can reach");
-    assert.strictEqual(said.length, 2, "…and neither fallback is silent");
-    assert.match(said[0], /DIFFOTATOR_HOOK_MIN_FILES=abc/, "the value that was ignored is named");
+    /* The getter reports the unreadable value; it does not announce it. Warning
+       from inside config() said the same thing again on every call, `hook
+       --install` among them. */
+    assert.strictEqual(said.length, 0, "reading the config is not what talks");
+    process.env.DIFFOTATOR_HOOK_MIN_FILES = "abc";
+    assert.strictEqual(H.config().badMinFiles, "abc", "…but the value it could not read is reported");
+    assert.strictEqual(H.config().minFiles, 3, "…alongside what it used instead");
 
     // What all of that is for: one changed file, a typo'd threshold, no opts
-    // override — the gate must still hold.
-    process.env.DIFFOTATOR_HOOK_MIN_FILES = "abc";
+    // override — the gate must still hold, and say why out loud.
     assert.match((await at({})).why, /below-threshold\(1<3\)/, "a typo does not remove the threshold");
+    assert.match(said.join(""), /DIFFOTATOR_HOOK_MIN_FILES=abc/, "the turn names the setting it ignored");
+    assert.strictEqual(said.length, 1, "once for the turn that used it, not once per lookup");
   } finally {
     process.stderr.write = write;
     delete process.env.DIFFOTATOR_HOOK_MIN_FILES;

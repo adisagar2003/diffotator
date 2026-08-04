@@ -30,21 +30,20 @@ const DEFAULT_MIN_FILES = 3;
  * nothing on screen explaining why.
  */
 function readMinFiles(raw) {
-  if (!raw) return DEFAULT_MIN_FILES;
+  if (!raw) return { minFiles: DEFAULT_MIN_FILES };
   const n = +raw;
-  if (!Number.isFinite(n)) {
-    process.stderr.write(
-      `diffotator hook: DIFFOTATOR_HOOK_MIN_FILES=${raw} is not a number — using ${DEFAULT_MIN_FILES}\n`
-    );
-    return DEFAULT_MIN_FILES;
-  }
-  return Math.max(1, n);
+  // Reported rather than announced: `config()` is a getter, and a getter that
+  // writes to stderr says the same thing again every time anyone asks — including
+  // `hook --install`, which has no business mentioning the threshold. `decide`
+  // owns the telling, because that is where the value is actually used.
+  if (!Number.isFinite(n)) return { minFiles: DEFAULT_MIN_FILES, badMinFiles: raw };
+  return { minFiles: Math.max(1, n) };
 }
 
 function config() {
   return {
     enabled: !OFF.test(process.env.DIFFOTATOR_HOOK || ""),
-    minFiles: readMinFiles(process.env.DIFFOTATOR_HOOK_MIN_FILES),
+    ...readMinFiles(process.env.DIFFOTATOR_HOOK_MIN_FILES),
   };
 }
 
@@ -80,6 +79,14 @@ const allow = () => ({ verdict: "allow" });
  */
 async function decide(input, opts = {}) {
   const cfg = { ...config(), ...opts };
+  // A threshold we could not read is not one of the silent reasons below: the
+  // setting is being ignored, and the symptom — a review every single turn — has
+  // nothing on screen explaining itself.
+  if (cfg.badMinFiles !== undefined && opts.minFiles === undefined) {
+    process.stderr.write(
+      `diffotator hook: DIFFOTATOR_HOOK_MIN_FILES=${cfg.badMinFiles} is not a number — using ${cfg.minFiles}\n`
+    );
+  }
   if (!cfg.enabled) return { ...allow(), why: "disabled" };
   // Claude Code sets this when a Stop hook already forced a continuation.
   if (input.stop_hook_active) return { ...allow(), why: "already-continued" };
