@@ -1174,7 +1174,7 @@ function renderDiff() {
     head.dataset.file = "";
     S.items = [];
     S.segments = [];
-    const base = S.ov.base && S.ov.base.ref;
+    const base = S.ov && S.ov.base && S.ov.base.ref; // a tab click can land here before boot's first overview fetch resolves
     diffVL.setEmpty(
       S.scope.type === "worktree"
         ? `Working tree is clean — nothing uncommitted to review.<br><span class="hint">` +
