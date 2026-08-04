@@ -735,12 +735,12 @@ function fileRow(path, m, depth, label) {
   } else {
     name = esc(label);
   }
-  /* Only changed files can be in the stream, so only they get a checkbox — the
-     File Tree tab lists the whole repo and has nothing to select. */
-  const box =
-    S.tab !== "tree" && m
-      ? `<span class="selbox${isSelected(path) ? " on" : ""}" data-sel="${esc(path)}">${isSelected(path) ? "☑" : "☐"}</span>`
-      : "";
+  /* Only changed files can be in the stream, so only they get a checkbox — on
+     every tab. The File Tree lists the whole repo; its unchanged files have no
+     meta (`m`) and therefore nothing to select. */
+  const box = m
+    ? `<span class="selbox${isSelected(path) ? " on" : ""}" data-sel="${esc(path)}">${isSelected(path) ? "☑" : "☐"}</span>`
+    : "";
   return `<div class="tnode${sel}${seen}" data-file="${esc(path)}" style="padding-left:${6 + depth * 12}px" title="${esc(path)}">
     <span class="caret">${seen ? "✓" : ""}</span>
     ${box}
