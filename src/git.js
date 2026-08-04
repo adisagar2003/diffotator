@@ -357,7 +357,10 @@ function parseUnifiedDiff(text) {
       // A chmod produces no hunks at all, so a parser that reads only hunks
       // renders the one reviewable fact — 100644 → 100755 — as +0/−0.
       const mm = /^(old|new) mode (\d+)$/.exec(raw);
-      if (mm) (mode = mode || {})[mm[1]] = mm[2];
+      if (mm) {
+        mode = mode || {};
+        mode[mm[1]] = mm[2];
+      }
       const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
       if (m) {
         oldNo = +m[1];
@@ -393,6 +396,14 @@ function parseUnifiedDiff(text) {
     if (cr) row.cr = 1;
     rows.push(row);
   }
+  /* A file that is CRLF from top to bottom has not *changed* its line endings,
+     and a marker on every row is wallpaper rather than information — one edit to
+     a Windows file would badge all of it, both sides. Only asymmetry is worth
+     showing: a CRLF row beside an LF one. Judged over the whole file, which is
+     what `fileDiff` asks git for. */
+  const eol = rows.filter((r) => r.t !== "gap");
+  if (eol.length && eol.every((r) => r.cr)) for (const r of eol) delete r.cr;
+
   const out = { rows, binary };
   if (mode && mode.old && mode.new && mode.old !== mode.new) out.mode = mode;
   return out;
