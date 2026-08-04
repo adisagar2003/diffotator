@@ -470,20 +470,31 @@ function selectCommit(sha) {
 let bannerDismissed = null; // sha the reader closed; the next explicit commit click resets it
 async function updateCommitBanner(scope) {
   const el = $("#commitInfo");
-  if (scope.type !== "commit") S.commitMeta = null;
-  if (scope.type !== "commit" || bannerDismissed === scope.sha) {
+  /* What the card describes: a commit scope names itself; an "up to here"
+     range from the timeline reads as the story through its newest commit, so
+     that commit's details are the useful header. A plain range names nothing. */
+  const sha =
+    scope.type === "commit" ? scope.sha
+    : scope.type === "range" && S.tl && S.tl.sel ? S.tl.sel
+    : null;
+  if (!sha) S.commitMeta = null;
+  if (!sha || bannerDismissed === sha) {
     el.hidden = true;
     return;
   }
   let meta;
   try {
-    ({ meta } = await api("commit", { sha: scope.sha }, { cached: true }));
+    ({ meta } = await api("commit", { sha }, { cached: true }));
   } catch {
     el.hidden = true; // no metadata is a missing banner, not a broken one
     return;
   }
-  // The scope may have moved on while the fetch was in flight.
-  if (!meta || S.scope.type !== "commit" || S.scope.sha !== scope.sha) return;
+  // The target may have moved on while the fetch was in flight.
+  const still =
+    scope.type === "commit"
+      ? S.scope.type === "commit" && S.scope.sha === sha
+      : S.scope.type === "range" && !!S.tl && S.tl.sel === sha;
+  if (!meta || !still) return;
   S.commitMeta = meta;
   el.innerHTML = `
     <div class="cb-head">
@@ -499,7 +510,7 @@ async function updateCommitBanner(scope) {
     ${meta.body ? `<pre class="cb-body">${esc(meta.body)}</pre>` : ""}`;
   el.hidden = false;
   el.querySelector("[data-cbclose]").onclick = () => {
-    bannerDismissed = scope.sha;
+    bannerDismissed = sha;
     el.hidden = true;
   };
 }
@@ -545,8 +556,11 @@ async function syncTimeline(scope) {
 
 function renderTimeline() {
   const on = !!S.tl;
+  const closed = !!Prefs.get("panel.timelineCollapsed");
   $("#timelinePane").hidden = !on;
-  $("#tlSplit").hidden = !on;
+  $("#timelinePane").classList.toggle("closed", closed);
+  $("#tlSplit").hidden = !on || closed; // a collapsed header bar has nothing to resize
+  $("#tlCaret").textContent = closed ? "▸" : "▾";
   if (!on) return;
   const rows = RM.timelineRows(S.tl.commits, S.tl.sel).map((r) =>
     r.kind === "all"
@@ -581,6 +595,10 @@ function tlMode(mode) {
 }
 $("#segUpto").onclick = () => tlMode("upto");
 $("#segOnly").onclick = () => tlMode("only");
+$("#tlCaret").onclick = () => {
+  Prefs.set("panel.timelineCollapsed", !Prefs.get("panel.timelineCollapsed"));
+  renderTimeline();
+};
 
 function collapseCommits(collapsed) {
   $("#commitPane").classList.toggle("collapsed", collapsed);
@@ -605,9 +623,11 @@ async function setScope(scope, name, keepCommits, fromTimeline) {
   S.pendingFocusFile = null; // …and any armed promotion was waiting on the old stream too
   S.treePaths = null;
   $("#scopeChip").textContent = Scope.label(scope);
-  updateCommitBanner(scope); // not awaited: metadata fills in when it arrives
-  // A scope chosen anywhere but the timeline re-anchors (or hides) the timeline.
+  // Timeline first: the info card reads S.tl.sel, and a scope chosen anywhere
+  // but the timeline must re-anchor (or clear) that selection before the card
+  // decides what it describes — the old order flashed a stale commit's card.
   if (!fromTimeline) syncTimeline(scope);
+  updateCommitBanner(scope); // not awaited: metadata fills in when it arrives
   if (!keepCommits) collapseCommits(scope.type !== "commit");
   sidebar();
   let files;

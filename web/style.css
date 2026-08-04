@@ -375,6 +375,11 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 /* ---------- commit timeline ---------- */
 #timelinePane{flex:0 0 auto;height:180px;display:flex;flex-direction:column;min-height:0;background:var(--panel)}
 .tl-head{display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid var(--border-soft);font-size:11.5px;color:var(--text-dim)}
+.tl-caret{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:10px;padding:0 2px}
+/* Collapsed to its header bar, editor-style; the inline height from prefs must lose. */
+#timelinePane.closed{height:auto !important}
+#timelinePane.closed .tl-list{display:none}
+#timelinePane.closed .tl-head{border-bottom:0}
 .tl-head .tl-title{flex:1}
 .tl-list{flex:1;overflow:auto;padding:3px 0}
 .tl-row{display:flex;align-items:center;gap:7px;padding:3px 10px;font-size:12px;cursor:pointer;white-space:nowrap}
