@@ -32,6 +32,7 @@ const S = {
   maxLanes: 1,
   selCommit: null,
   files: [],
+  localCount: null, // working-tree changes, kept across scopes for the sidebar badge
   selFile: null,
   // One entry per path: {loaded, rows, fullRows, expanded, full, binary, tooBig, error, empty, mode}
   perFile: new Map(),
@@ -224,90 +225,74 @@ function measureChar() {
 // ---------------------------------------------------------------------------
 function sidebar() {
   const ov = S.ov;
-  const changedCount = S.scope.type === "worktree" ? S.files.length : null;
-  const active = (name) => (S.scopeName === name ? " active" : "");
   let h = "";
-  h += `<div class="side-item${active("Local Changes")}" data-act="scope-worktree">
-    <span class="ico">📝</span><span class="lbl">Local Changes</span>
-    <span class="badge">${changedCount ?? ""}</span></div>`;
-  if (ov.base) {
-    h += `<div class="side-item${active("Branch")}" data-act="scope-range">
-      <span class="ico">⑂</span><span class="lbl">vs ${esc(ov.base.ref)}</span></div>`;
+  for (const r of RM.sideRows({ row: S.scopeName, localCount: S.localCount, base: ov.base && ov.base.ref })) {
+    h += `<div class="side-item${r.active ? " active" : ""}" data-act="${r.act}">
+      <span class="ico">${r.ico}</span><span class="lbl">${esc(r.label)}</span>
+      <span class="badge">${r.badge}</span></div>`;
   }
-  h += `<div class="side-item${active("All Commits")}" data-act="scope-all">
-    <span class="ico">≡</span><span class="lbl">All Commits</span></div>`;
 
-  const group = (id, title, body) =>
-    `<div class="side-group${S.fileOpen.has(id) ? "" : " closed"}" data-group="${id}">
-       <span class="caret">▾</span>${title}</div>
-     <div class="side-sub${S.fileOpen.has(id) ? "" : " hidden"}" data-sub="${id}">${body}</div>`;
+  // Every group is counted and capped through one helper, so no badge can go
+  // missing or outrun the rows below it again.
+  const group = (id, name, items, row, cap) => {
+    const g = RM.sideGroup(items, cap);
+    const open = S.fileOpen.has(id);
+    h += `<div class="side-group${open ? "" : " closed"}" data-group="${id}">
+       <span class="caret">▾</span>${name} <span class="badge">${g.badge}</span></div>
+     <div class="side-sub${open ? "" : " hidden"}" data-sub="${id}">${g.shown.map(row).join("")}</div>`;
+  };
 
   if (ov.worktrees.length > 1) {
-    h += group(
+    group(
       "wt",
       "Worktrees",
-      ov.worktrees
-        .map(
-          (w) =>
-            // A detached worktree has no branch; its HEAD sha is what git can resolve.
-            `<div class="side-item" data-act="rev" data-rev="${esc(w.branch || w.head || "HEAD")}">
-              <span class="ico">🗂</span><span class="lbl" title="${esc(w.path)}">${esc(w.name)}</span></div>`
-        )
-        .join("")
+      ov.worktrees,
+      (w) =>
+        // A detached worktree has no branch; its HEAD sha is what git can resolve.
+        `<div class="side-item" data-act="rev" data-rev="${esc(w.branch || w.head || "HEAD")}">
+          <span class="ico">🗂</span><span class="lbl" title="${esc(w.path)}">${esc(w.name)}</span></div>`
     );
   }
-  h += group(
+  group(
     "br",
-    `Branches <span class="badge">${ov.branches.length}</span>`,
-    ov.branches
-      .slice(0, 300)
-      .map(
-        (b) =>
-          `<div class="side-item" data-act="rev" data-rev="${esc(b.name)}">
-            <span class="ico">⑂</span><span class="lbl">${esc(b.name)}</span>
-            <span class="badge">${b.behind ? b.behind + "↓" : ""}${b.ahead ? b.ahead + "↑" : ""}</span></div>`
-      )
-      .join("")
+    "Branches",
+    ov.branches,
+    (b) =>
+      `<div class="side-item" data-act="rev" data-rev="${esc(b.name)}">
+        <span class="ico">⑂</span><span class="lbl">${esc(b.name)}</span>
+        <span class="badge">${b.behind ? b.behind + "↓" : ""}${b.ahead ? b.ahead + "↑" : ""}</span></div>`,
+    300
   );
   if (ov.tags.length) {
-    h += group(
+    group(
       "tg",
-      `Tags <span class="badge">${ov.tags.length}</span>`,
-      ov.tags
-        .slice(0, 200)
-        .map(
-          (t) =>
-            `<div class="side-item" data-act="rev" data-rev="${esc(t.name)}">
-              <span class="ico">🏷</span><span class="lbl">${esc(t.name)}</span></div>`
-        )
-        .join("")
+      "Tags",
+      ov.tags,
+      (t) =>
+        `<div class="side-item" data-act="rev" data-rev="${esc(t.name)}">
+          <span class="ico">🏷</span><span class="lbl">${esc(t.name)}</span></div>`,
+      200
     );
   }
   if (ov.stashes.length) {
-    h += group(
+    group(
       "st",
-      `Stashes <span class="badge">${ov.stashes.length}</span>`,
-      ov.stashes
-        .map(
-          (s) =>
-            `<div class="side-item" data-act="commit" data-sha="${s.sha}">
-              <span class="ico">📦</span><span class="lbl">${esc(s.subject)}</span></div>`
-        )
-        .join("")
+      "Stashes",
+      ov.stashes,
+      (s) =>
+        `<div class="side-item" data-act="commit" data-sha="${s.sha}">
+          <span class="ico">📦</span><span class="lbl">${esc(s.subject)}</span></div>`
     );
   }
   if (ov.remoteBranches.length) {
-    h += group(
+    group(
       "rm",
-      `Remotes <span class="badge">${ov.remoteBranches.length}</span>`,
-      ov.remoteBranches
-        .slice(0, 300)
-        .map(
-          (b) =>
-            `<div class="side-item" data-act="rev" data-rev="${esc(b.name)}">
-              <span class="ico">☁</span><span class="lbl">${esc(b.name)}</span></div>`
-        )
-        .join("")
+      "Remotes",
+      ov.remoteBranches,
+      (b) =>
+        `<div class="side-item" data-act="rev" data-rev="${esc(b.name)}">
+          <span class="ico">☁</span><span class="lbl">${esc(b.name)}</span></div>`,
+      300
     );
   }
   $("#sideScroll").innerHTML = h;
@@ -468,7 +453,7 @@ async function loadCommits(select = true) {
 async function selectCommit(sha) {
   S.selCommit = sha;
   commitVL.refresh();
-  setScope({ type: "commit", sha }, "Commit", true);
+  setScope({ type: "commit", sha }, null, true);
   try {
     // A failed side-panel fetch must not take down the page — leave whatever
     // commit detail was already showing.
@@ -503,7 +488,9 @@ let scopeSeq = 0;
 async function setScope(scope, name, keepCommits) {
   const seq = ++scopeSeq; // a slower earlier load must not clobber a newer one
   S.scope = scope;
-  S.scopeName = name;
+  // `name` is the sidebar row this scope was reached from. A commit has no row
+  // of its own, so it passes none and the row that got the reader here stays lit.
+  if (name) S.scopeName = name;
   S.selFile = null;
   S.perFile = new Map();
   S.segments = [];
@@ -524,6 +511,8 @@ async function setScope(scope, name, keepCommits) {
   }
   if (seq !== scopeSeq) return;
   S.files = files;
+  // The sidebar counts the working tree whatever scope is open, so remember it.
+  if (Scope.isWorktree(scope)) S.localCount = files.length;
   render();
   fetchStream(); // not awaited: each arrival repaints the stream it lands in
   // The File Tree pane is scope-specific and was just invalidated; without this
