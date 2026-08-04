@@ -53,6 +53,7 @@ const S = {
   ann: [],
   viewed: new Set(),
   focus: null,
+  pendingFocusFile: null,
   treePaths: null,
   treeOpen: new Set(),
   fileOpen: new Set(),
@@ -870,6 +871,10 @@ function rebuildStream() {
   renderProgress();
   revalidatePin(); // heights moved: the pin may no longer describe anything
   updateStickyHeader(true); // a file arriving can move both the top file and the count
+  if (S.pendingFocusFile) {
+    const st = S.perFile.get(S.pendingFocusFile);
+    if (st && st.loaded) anchorFocusIn(S.pendingFocusFile);
+  }
 }
 
 /** Sidebar click / j/k target: make sure it's in the stream, then go there. */
@@ -1113,6 +1118,19 @@ const ROW_HTML = {
 
   note(item, top) {
     return `<div class="fold note" style="top:${top}px">${esc(item.text)}</div>`;
+  },
+
+  /** The review's finish line — appears when every selected file is viewed. */
+  allviewed(item, top) {
+    return `<div class="avc" style="top:${top}px">
+      <div class="av-title">All ${item.n} file${item.n === 1 ? "" : "s"} viewed 🎉</div>
+      <div class="av-sub">${item.comments ? `${item.comments} comment${item.comments === 1 ? "" : "s"} drafted` : "No comments drafted"}</div>
+      <div class="av-act">${
+        item.comments
+          ? `<button data-finish-send>Send feedback</button><span class="av-hint">⌘⏎</span>`
+          : `<button data-finish-approve>Approve</button>`
+      }</div>
+    </div>`;
   },
 
   /* Every read below comes off the item, not off `S`: one stream mixes files,
@@ -1392,6 +1410,8 @@ $("#diffBody").addEventListener("click", (e) => {
     openPopover(gut, gut.dataset.file, gut.dataset.side, +gut.dataset.line);
     return;
   }
+  if (e.target.closest("[data-finish-send]")) return openModal("annotated");
+  if (e.target.closest("[data-finish-approve]")) return openModal("approved");
   // `setEmpty` writes its HTML inside #diffBody, so the empty stream's own
   // "Select all" lands here rather than on the file pane's copy.
   selAllClick(e);
@@ -1476,6 +1496,7 @@ $("#searchClose").onclick = closeSearch;
 
 /* A line cursor so a review can be driven without ever reaching for the mouse. */
 function moveFocus(dir) {
+  S.pendingFocusFile = null; // moving the cursor by hand cancels any pending anchor
   const next = RM.focusStep(S.items, S.focus, dir);
   if (!next) return;
   /* The row's own file, not `S.selFile`: stepping off the end of one file lands
@@ -1484,6 +1505,22 @@ function moveFocus(dir) {
   diffVL.scrollToIndex(next.index, false);
   pinAfterScroll(S.focus.file); // the cursor's file owns the header, reachable or not
   diffVL.refresh();
+}
+
+/** Land the cursor on the first change of `path` — the row the viewport just
+    scrolled to — so the next n/↓ continues from what the reader is looking at.
+    A still-loading segment has no honest row yet; remember the intent and
+    rebuildStream promotes it when the rows arrive. */
+function anchorFocusIn(path) {
+  const hit = RM.firstChangeRowIn(S.items, S.segments, path);
+  if (hit) {
+    S.focus = { file: path, side: hit.side, line: hit.line };
+    S.pendingFocusFile = null;
+    diffVL.refresh(); // repaint the focus ring
+  } else {
+    S.focus = null;
+    S.pendingFocusFile = path;
+  }
 }
 
 /** Comment on the focused line, scrolling it into the DOM first if needed. */
@@ -1563,7 +1600,13 @@ function toggleViewed(on) {
   if (!on) return;
   setCollapsed(S.selFile, true); // GitHub's move: what you have read folds away
   const nx = nextUnviewed();
-  if (nx) scrollToFile(nx);
+  if (nx) {
+    scrollToFile(nx);
+    anchorFocusIn(nx); // cursor and viewport must agree after v
+  } else if (S.items.length) {
+    // Last v of the review: bring the finish card (last item) into view.
+    diffVL.scrollToIndex(S.items.length - 1, true);
+  }
 }
 
 /* "Full file" belongs to a file, not to the pane: the stream shows many files

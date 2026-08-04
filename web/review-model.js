@@ -27,6 +27,7 @@
     cardPad: 14,
     cardMaxLines: 4, // comment bodies are line-clamped to this
     context: 3, // unmodified lines kept either side of a change
+    allViewed: 96, // .avc height in style.css — border-box, must match exactly
   };
 
   // --- annotation indexing -------------------------------------------------
@@ -59,6 +60,7 @@
 
   function itemHeight(item, charsPerLine) {
     if (item && item.k === "fileHeader") return GEOM.fileHeader;
+    if (item && item.k === "allviewed") return GEOM.allViewed;
     if (!item || item.k !== "comment") return GEOM.row; // rows, folds, loading, note
     return GEOM.cardHead + GEOM.cardPad + commentLines(item.a, charsPerLine) * GEOM.cardLine;
   }
@@ -269,6 +271,13 @@
       }
       segments.push({ file: f.path, start, end: items.length });
     }
+    // The review's finish line: every selected file viewed AND folded — the
+    // state the v loop leaves behind. Derived, never stored: an item, not
+    // app-side chrome, so it scrolls, windowing prices it, and any rebuild
+    // that breaks the condition (un-view, un-fold, re-select) removes it.
+    if (shown.length && shown.every((f) => viewedSet.has(f.path) && collapsed.has(f.path))) {
+      items.push({ k: "allviewed", n: shown.length, comments: annotations.length });
+    }
     return { items, segments, maxLineLen };
   }
 
@@ -373,6 +382,21 @@
     return null;
   }
 
+  /** First changed row inside `file`'s segment, as {index, side, line}, or
+      null (file collapsed/loading/absent). Where the cursor should land when
+      a jump brings the reader to this file. */
+  function firstChangeRowIn(items, segments, file) {
+    const seg = segments.find((s) => s.file === file);
+    if (!seg) return null;
+    for (let i = seg.start; i < seg.end; i++) {
+      if (isChangeRow(items[i])) {
+        const l = rowLine(items[i]);
+        if (l) return { index: i, side: l.side, line: l.line };
+      }
+    }
+    return null;
+  }
+
   // --- commit graph --------------------------------------------------------
 
   /**
@@ -435,5 +459,6 @@
   exp.focusStep = focusStep;
   exp.searchHits = searchHits;
   exp.nextUnviewed = nextUnviewed;
+  exp.firstChangeRowIn = firstChangeRowIn;
   exp.computeGraph = computeGraph;
 })(typeof module === "object" && module.exports ? module.exports : (window.RM = {}));

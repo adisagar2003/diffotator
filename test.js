@@ -296,6 +296,53 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.strictEqual(RM.nextUnviewed(sel2, "a.js", (p) => p === "a.js"), "c.js", "next unviewed skips deselected files");
 }
 
+// --- allviewed finish item + firstChangeRowIn ------------------------------
+{
+  const files = [
+    { path: "a.js", additions: 1, deletions: 0 },
+    { path: "b.js", additions: 1, deletions: 0 },
+  ];
+  const rows = [
+    { t: "ctx", o: 1, n: 1, s: "one" },
+    { t: "add", n: 2, s: "two" },
+  ];
+  const pf = new Map([
+    ["a.js", { loaded: true, rows, expanded: new Set(), full: false }],
+    ["b.js", { loaded: true, rows, expanded: new Set(), full: false }],
+  ]);
+  const sel = new Set(["a.js", "b.js"]);
+
+  const done = RM.buildStream({
+    files, selected: sel, collapsed: new Set(sel), perFile: pf,
+    annotations: [{ file: "a.js", side: "new", line: 2, body: "x" }],
+    viewedSet: new Set(sel),
+  });
+  const last = done.items[done.items.length - 1];
+  assert.ok(last.k === "allviewed", "all viewed + all folded → finish item appended last");
+  assert.ok(last.n === 2 && last.comments === 1, "finish item carries file and comment counts");
+  assert.ok(done.segments.length === 2, "finish item is not a segment");
+
+  const reading = RM.buildStream({ files, selected: sel, collapsed: new Set(), perFile: pf, viewedSet: new Set(sel) });
+  assert.ok(!reading.items.some((it) => it.k === "allviewed"), "a file unfolded → still reading, no finish item");
+
+  const part = RM.buildStream({ files, selected: sel, collapsed: new Set(["a.js"]), perFile: pf, viewedSet: new Set(["a.js"]) });
+  assert.ok(!part.items.some((it) => it.k === "allviewed"), "one unviewed file → no finish item");
+
+  const none = RM.buildStream({ files, selected: new Set(), collapsed: new Set(), perFile: pf, viewedSet: new Set() });
+  assert.ok(!none.items.some((it) => it.k === "allviewed"), "empty selection → no finish item");
+
+  assert.ok(RM.itemHeight({ k: "allviewed" }, 80) === RM.GEOM.allViewed, "allviewed row uses its GEOM height");
+
+  const hit = RM.firstChangeRowIn(reading.items, reading.segments, "b.js");
+  assert.ok(hit && hit.side === "new" && hit.line === 2, "firstChangeRowIn skips ctx, finds the add");
+  assert.ok(reading.items[hit.index].f === "b.js", "firstChangeRowIn stays inside the file");
+
+  const pf2 = new Map([["a.js", { loaded: true, rows, expanded: new Set(), full: false }]]);
+  const loading = RM.buildStream({ files, selected: sel, collapsed: new Set(), perFile: pf2 });
+  assert.ok(RM.firstChangeRowIn(loading.items, loading.segments, "b.js") === null, "unloaded file → null");
+  assert.ok(RM.firstChangeRowIn(reading.items, reading.segments, "zzz.js") === null, "unknown file → null");
+}
+
 /* --- keyboard focus contract -----------------------------------------------
    The keydown handler needs a document, so the two decisions it kept getting
    wrong live in web/keys.js and are asserted here. A helper with the right

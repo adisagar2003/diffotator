@@ -293,6 +293,22 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 /* Not a diff and not a fold — a sentence about why a file has nothing to show. */
 .fold.note{font-style:italic;cursor:default}
 .fold.note:hover{background:#1f2226;color:var(--muted)}
+/* The finish card. Height is exactly RM.GEOM.allViewed (96) — border-box, so
+   the borders live inside it — or the prefix-sum index drifts. */
+.avc{
+  position:absolute;left:0;right:0;height:96px;box-sizing:border-box;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  background:var(--panel);border-top:1px solid var(--border);font-family:var(--ui)
+}
+.avc .av-title{font-size:14px;font-weight:600;color:var(--text)}
+.avc .av-sub{font-size:12px;color:var(--muted)}
+.avc .av-act{display:flex;align-items:center;gap:8px;margin-top:2px}
+.avc .av-act button{
+  padding:3px 12px;border-radius:5px;border:1px solid var(--border);
+  background:var(--elev);color:var(--text);cursor:pointer;font-size:12px
+}
+.avc .av-act button:hover{background:var(--elev2)}
+.avc .av-hint{font-size:11px;color:var(--muted)}
 .cmtcard{
   position:absolute;left:0;right:0;background:#20242c;border-top:1px solid var(--accent-dim);
   border-bottom:1px solid var(--accent-dim);border-left:3px solid var(--accent);
