@@ -71,6 +71,17 @@
             <button class="icotog" data-foldtoggle aria-label="Fold all files"></button>
           </div>
           <div id="fileTree" class="tree" tabindex="0"></div>
+          <div class="hsplit invert" id="tlSplit" data-target="timelinePane" hidden></div>
+          <div id="timelinePane" hidden>
+            <div class="tl-head">
+              <span class="tl-title">Commits <span id="tlCount" class="count"></span></span>
+              <div class="seg tiny">
+                <button id="segUpto" class="seg-btn active" title="Accumulated changes from the base through the selected commit">Up to here</button>
+                <button id="segOnly" class="seg-btn" title="Only the selected commit's changes">This commit</button>
+              </div>
+            </div>
+            <div id="timeline" class="tl-list" tabindex="0"></div>
+          </div>
         </div>
         <div class="vsplit" data-target="leftPane"></div>
         <div id="rightPane">

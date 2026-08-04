@@ -522,7 +522,27 @@
     return { shown, badge: shown.length < items.length ? `${shown.length}/${items.length}` : String(items.length) };
   }
 
+  /**
+   * The commit timeline panel's whole contract, held where node can test it.
+   * `timelineRows` is what the panel shows; `timelineScope` is what a
+   * selection means. t = { base, head, sel, mode } with mode "upto" | "only".
+   */
+  function timelineRows(commits, sel) {
+    const rows = [{ kind: "all", sel: !sel }];
+    for (const c of commits || [])
+      rows.push({ kind: "commit", sha: c.sha, short: c.short, subject: c.subject, sel: sel === c.sha });
+    return rows;
+  }
+
+  function timelineScope(t) {
+    if (!t.sel) return { type: "range", base: t.base, head: t.head };
+    if (t.mode === "only") return { type: "commit", sha: t.sel };
+    return { type: "range", base: t.base, head: t.sel };
+  }
+
   exp.GEOM = GEOM;
+  exp.timelineRows = timelineRows;
+  exp.timelineScope = timelineScope;
   exp.annKey = annKey;
   exp.annIndex = annIndex;
   exp.commentLines = commentLines;

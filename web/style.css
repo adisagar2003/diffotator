@@ -371,6 +371,18 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
   border-radius:6px;padding:8px 10px;margin:8px 0 2px;max-height:7.5em;overflow:auto
 }
 
+/* ---------- commit timeline ---------- */
+#timelinePane{flex:0 0 auto;height:180px;display:flex;flex-direction:column;min-height:0;background:var(--panel)}
+.tl-head{display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid var(--border-soft);font-size:11.5px;color:var(--text-dim)}
+.tl-head .tl-title{flex:1}
+.tl-list{flex:1;overflow:auto;padding:3px 0}
+.tl-row{display:flex;align-items:center;gap:7px;padding:3px 10px;font-size:12px;cursor:pointer;white-space:nowrap}
+.tl-row:hover{background:var(--elev)}
+.tl-row.sel{background:var(--sel)}
+.tl-sha{font-family:var(--mono);font-size:11px;color:var(--muted);flex:0 0 auto}
+.tl-sub{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tl-row.all .tl-sub{font-weight:600}
+
 /* ---------- comments panel ---------- */
 #commentsPanel{width:320px;flex:0 0 auto;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column}
 .cp-head{height:31px;display:flex;align-items:center;gap:6px;padding:0 12px;border-bottom:1px solid var(--border);font-size:12px;color:var(--text-dim)}

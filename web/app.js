@@ -67,6 +67,8 @@ const S = {
   search: { q: "", hits: [], idx: 0 },
   loadingMore: false,
   commitsDone: false,
+  tl: null, // commit timeline: { base, head, commits, sel, mode } while the scope family is a range
+  commitMeta: null, // banner metadata for the current commit scope; tags comments with their commit
 };
 
 // ---------------------------------------------------------------------------
@@ -467,6 +469,7 @@ function selectCommit(sha) {
 let bannerDismissed = null; // sha the reader closed; the next explicit commit click resets it
 async function updateCommitBanner(scope) {
   const el = $("#commitBanner");
+  if (scope.type !== "commit") S.commitMeta = null;
   if (scope.type !== "commit" || bannerDismissed === scope.sha) {
     el.hidden = true;
     return;
@@ -480,6 +483,7 @@ async function updateCommitBanner(scope) {
   }
   // The scope may have moved on while the fetch was in flight.
   if (!meta || S.scope.type !== "commit" || S.scope.sha !== scope.sha) return;
+  S.commitMeta = meta;
   el.innerHTML = `
     <div class="cb-head">
       <span class="cb-subject">${esc(meta.subject)}</span>
@@ -499,6 +503,77 @@ async function updateCommitBanner(scope) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// commit timeline — the branch as a story, under the file list
+// ---------------------------------------------------------------------------
+/*
+ * Shown only while reviewing a range: the commits inside base..head, oldest
+ * first. Clicking one narrows the review — to everything up to that commit
+ * ("Up to here") or to that commit alone ("This commit") — by switching scope
+ * through the ordinary setScope. The panel is a scope switcher, not new diff
+ * machinery; RM.timelineRows / RM.timelineScope hold its contract.
+ */
+async function syncTimeline(scope) {
+  if (scope.type !== "range") {
+    S.tl = null;
+    renderTimeline();
+    return;
+  }
+  const head = scope.head || "HEAD";
+  S.tl = { base: scope.base, head, commits: null, sel: null, mode: (S.tl && S.tl.mode) || "upto" };
+  renderTimeline();
+  const seq = scopeSeq;
+  let commits;
+  try {
+    // A failed side-panel fetch must not take down the review — the panel just
+    // stays empty and the full-range row still describes what is on screen.
+    ({ commits } = await api("commits", { rev: `${scope.base}..${head}`, limit: 500 }, { cached: true }));
+  } catch {
+    return;
+  }
+  if (seq !== scopeSeq || !S.tl || S.tl.base !== scope.base) return; // scope moved on mid-fetch
+  S.tl.commits = commits.slice().reverse(); // git speaks newest-first; a story reads oldest-first
+  renderTimeline();
+}
+
+function renderTimeline() {
+  const on = !!S.tl;
+  $("#timelinePane").hidden = !on;
+  $("#tlSplit").hidden = !on;
+  if (!on) return;
+  const rows = RM.timelineRows(S.tl.commits, S.tl.sel).map((r) =>
+    r.kind === "all"
+      ? `<div class="tl-row all${r.sel ? " sel" : ""}" data-tlall><span class="tl-sub">All branch changes</span></div>`
+      : `<div class="tl-row${r.sel ? " sel" : ""}" data-tlsha="${r.sha}">
+           <span class="tl-sha">${esc(r.short)}</span><span class="tl-sub" title="${esc(r.subject)}">${esc(r.subject)}</span></div>`
+  );
+  $("#timeline").innerHTML = rows.join("");
+  $("#tlCount").textContent = S.tl.commits ? String(S.tl.commits.length) : "";
+  $("#segUpto").classList.toggle("active", S.tl.mode === "upto");
+  $("#segOnly").classList.toggle("active", S.tl.mode === "only");
+}
+
+$("#timeline").addEventListener("click", (e) => {
+  if (!S.tl) return;
+  const row = e.target.closest("[data-tlsha]");
+  const all = e.target.closest("[data-tlall]");
+  if (!row && !all) return;
+  // Re-clicking the selected commit steps back out to the full branch.
+  const sha = row && S.tl.sel !== row.dataset.tlsha ? row.dataset.tlsha : null;
+  S.tl.sel = sha;
+  renderTimeline();
+  setScope(RM.timelineScope(S.tl), null, true, true);
+});
+
+function tlMode(mode) {
+  if (!S.tl || S.tl.mode === mode) return;
+  S.tl.mode = mode;
+  renderTimeline();
+  if (S.tl.sel) setScope(RM.timelineScope(S.tl), null, true, true);
+}
+$("#segUpto").onclick = () => tlMode("upto");
+$("#segOnly").onclick = () => tlMode("only");
+
 function collapseCommits(collapsed) {
   $("#commitPane").classList.toggle("collapsed", collapsed);
   document.querySelector(".hsplit").style.display = collapsed ? "none" : "";
@@ -508,7 +583,7 @@ function collapseCommits(collapsed) {
 // scope + file list
 // ---------------------------------------------------------------------------
 let scopeSeq = 0;
-async function setScope(scope, name, keepCommits) {
+async function setScope(scope, name, keepCommits, fromTimeline) {
   const seq = ++scopeSeq; // a slower earlier load must not clobber a newer one
   S.scope = scope;
   // `name` is the sidebar row this scope was reached from. A commit has no row
@@ -523,6 +598,8 @@ async function setScope(scope, name, keepCommits) {
   S.treePaths = null;
   $("#scopeChip").textContent = Scope.label(scope);
   updateCommitBanner(scope); // not awaited: metadata fills in when it arrives
+  // A scope chosen anywhere but the timeline re-anchors (or hides) the timeline.
+  if (!fromTimeline) syncTimeline(scope);
   if (!keepCommits) collapseCommits(scope.type !== "commit");
   sidebar();
   let files;
@@ -1875,7 +1952,21 @@ function savePopover() {
     code: $("#popCode").textContent,
     lang: extOf(p.file),
   };
+  /* Tagged at creation, not at send or edit: a comment written against one
+     commit's diff stays that commit's comment — flipping the timeline toggle
+     or editing it later from another scope must not silently retag it. The
+     line anchor lives in the diff it was written against, so the sha is what
+     keeps it meaningful elsewhere. */
   const i = S.ann.findIndex((a) => a.id === rec.id);
+  if (i >= 0 && S.ann[i].commit) rec.commit = S.ann[i].commit;
+  else if (i < 0 && S.scope.type === "commit") {
+    const m = S.commitMeta && S.commitMeta.sha === S.scope.sha ? S.commitMeta : null;
+    rec.commit = {
+      sha: S.scope.sha,
+      short: m ? m.short : String(S.scope.sha).slice(0, 7),
+      subject: m ? m.subject : "",
+    };
+  }
   if (i >= 0) S.ann[i] = rec;
   else S.ann.push(rec);
   changed();
@@ -2054,7 +2145,9 @@ document.querySelectorAll(".vsplit,.hsplit").forEach((sp) => {
     const start = horiz ? e.clientX : e.clientY;
     const base = horiz ? target.offsetWidth : target.offsetHeight;
     const move = (ev) => {
-      const d = (horiz ? ev.clientX : ev.clientY) - start;
+      let d = (horiz ? ev.clientX : ev.clientY) - start;
+      // A splitter above its target (the timeline pane) grows it by dragging up.
+      if (sp.classList.contains("invert")) d = -d;
       const v = Math.max(120, base + d);
       if (horiz) target.style.width = v + "px";
       else target.style.height = v + "px";

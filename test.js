@@ -31,6 +31,51 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.ok(out.includes("Looks close."), "summary included");
 }
 
+// A comment tagged with the commit it was written against says so on its
+// location line; untagged comments render exactly as before.
+{
+  const out = render({
+    decision: "annotated",
+    repo: "demo",
+    scope: { type: "range", base: "origin/main" },
+    annotations: [
+      { file: "a.ts", side: "new", line: 3, label: "nit", body: "rename", commit: { sha: "abcdef1234567890", short: "abcdef1", subject: "feat: add thing" } },
+      { file: "a.ts", side: "new", line: 12, label: "issue", body: "untagged" },
+    ],
+  });
+  assert.ok(out.includes('re: commit abcdef1 "feat: add thing"'), "commit tag rendered");
+  assert.strictEqual(out.match(/re: commit/g).length, 1, "only the tagged comment carries it");
+}
+
+// --- commit timeline (panel contract) ---------------------------------------
+{
+  const commits = [
+    { sha: "c2".repeat(20), short: "c2c2c2c", subject: "second" },
+    { sha: "c1".repeat(20), short: "c1c1c1c", subject: "first" },
+  ];
+  const rows = RM.timelineRows(commits, null);
+  assert.strictEqual(rows[0].kind, "all");
+  assert.ok(rows[0].sel, "no selection = the full branch row is active");
+  assert.strictEqual(rows.length, 3);
+  const sel = RM.timelineRows(commits, commits[1].sha);
+  assert.ok(!sel[0].sel && sel[2].sel, "selection moves off the all-row onto the commit");
+  assert.deepStrictEqual(
+    RM.timelineScope({ base: "origin/main", head: "HEAD", sel: null, mode: "only" }),
+    { type: "range", base: "origin/main", head: "HEAD" },
+    "no selection is the full range whatever the toggle says"
+  );
+  assert.deepStrictEqual(
+    RM.timelineScope({ base: "origin/main", head: "HEAD", sel: "abc123", mode: "upto" }),
+    { type: "range", base: "origin/main", head: "abc123" },
+    "up-to-here accumulates from the base through the selected commit"
+  );
+  assert.deepStrictEqual(
+    RM.timelineScope({ base: "origin/main", head: "HEAD", sel: "abc123", mode: "only" }),
+    { type: "commit", sha: "abc123" },
+    "this-commit narrows to the commit alone"
+  );
+}
+
 // --- highlighter + word diff -----------------------------------------------
 {
   global.window = {};
