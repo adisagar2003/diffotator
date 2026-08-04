@@ -164,6 +164,101 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.strictEqual(RM.computeGraph([{ sha: "A", parents: [] }]).maxLanes, 1, "a lone commit needs one lane");
 }
 
+// --- buildStream: many files, one windowed list ----------------------------
+{
+  const ctx = (i) => ({ t: "ctx", o: i, n: i, s: "line" + i });
+  const mkRows = (n, changeAt) => {
+    const rows = [];
+    for (let i = 1; i <= n; i++) {
+      if (i === changeAt) {
+        rows.push({ t: "del", o: i, s: "old" + i });
+        rows.push({ t: "add", n: i, s: "new" + i });
+      } else rows.push(ctx(i));
+    }
+    return rows;
+  };
+  const files = [
+    { path: "a.js", additions: 1, deletions: 1, status: "modified" },
+    { path: "b.js", additions: 1, deletions: 1, status: "modified" },
+    { path: "c.js", additions: 0, deletions: 0, status: "modified" },
+  ];
+  const perFile = new Map([
+    ["a.js", { loaded: true, rows: mkRows(10, 5), expanded: new Set(), full: false }],
+    ["b.js", { loaded: true, rows: mkRows(10, 5), expanded: new Set(), full: false }],
+    // c.js not loaded yet
+  ]);
+  const base = {
+    files,
+    selected: new Set(["a.js", "b.js", "c.js"]),
+    collapsed: new Set(),
+    perFile,
+    annotations: [],
+    view: "unified",
+    viewedSet: new Set(),
+  };
+
+  const out = RM.buildStream(base);
+  assert.strictEqual(out.items[0].k, "fileHeader", "stream opens with a header");
+  assert.strictEqual(out.items[0].f, "a.js");
+  assert.strictEqual(out.segments.length, 3, "one segment per selected file");
+  const segB = out.segments[1];
+  assert.strictEqual(out.items[segB.start].k, "fileHeader");
+  assert.strictEqual(out.items[segB.start].f, "b.js", "segments in file-list order");
+  assert.ok(out.items.every((it) => it.f), "every stream item knows its file");
+  const segC = out.segments[2];
+  assert.strictEqual(out.items[segC.start + 1].k, "loading", "unloaded file holds a placeholder row");
+  assert.strictEqual(RM.itemHeight(out.items[0]), RM.GEOM.fileHeader, "header height is fixed");
+  assert.strictEqual(RM.itemHeight(out.items[segC.start + 1]), RM.GEOM.row, "loading row is row-height");
+
+  // collapse: segment folds to its header
+  const col = RM.buildStream({ ...base, collapsed: new Set(["a.js"]) });
+  assert.strictEqual(col.segments[0].end - col.segments[0].start, 1, "collapsed file is header-only");
+  assert.strictEqual(col.items[1].k, "fileHeader", "next header follows immediately");
+  assert.strictEqual(col.items[1].f, "b.js");
+
+  // selection: deselected file is absent entirely
+  const sel = RM.buildStream({ ...base, selected: new Set(["b.js"]) });
+  assert.strictEqual(sel.segments.length, 1);
+  assert.ok(sel.items.every((it) => it.f === "b.js"), "deselected files leave no trace");
+
+  // none selected: empty stream
+  assert.strictEqual(RM.buildStream({ ...base, selected: new Set() }).items.length, 0);
+
+  // binary/error file: header + note, no rows
+  const pf2 = new Map(perFile);
+  pf2.set("c.js", { loaded: true, binary: true });
+  const bin = RM.buildStream({ ...base, perFile: pf2 });
+  const segC2 = bin.segments[2];
+  assert.strictEqual(bin.items[segC2.start + 1].k, "note", "binary renders as a note row");
+
+  // regression: one selected, loaded file ≡ buildItems output plus its header
+  const single = RM.buildStream({ ...base, selected: new Set(["a.js"]) });
+  const legacy = RM.buildItems({
+    rows: perFile.get("a.js").rows,
+    annotations: [],
+    file: "a.js",
+    expanded: new Set(),
+    full: false,
+    view: "unified",
+  });
+  assert.strictEqual(single.items.length, legacy.items.length + 1, "stream = header + same items");
+  assert.deepStrictEqual(
+    single.items.slice(1).map((it) => it.k),
+    legacy.items.map((it) => it.k),
+    "same item kinds in the same order"
+  );
+  assert.strictEqual(single.maxLineLen, legacy.maxLineLen, "pan width carries over");
+
+  // rowIndexFor with the file filter: same line number exists in both files
+  const two = RM.buildStream({ ...base, selected: new Set(["a.js", "b.js"]) });
+  const inB = RM.rowIndexFor(two.items, "new", 5, "b.js");
+  assert.ok(inB > two.segments[1].start, "file-filtered lookup lands in b.js, not a.js");
+
+  // the v-loop walks only the selected stream
+  const sel2 = ["a.js", "c.js"]; // b.js deselected
+  assert.strictEqual(RM.nextUnviewed(sel2, "a.js", (p) => p === "a.js"), "c.js", "next unviewed skips deselected files");
+}
+
 /* --- keyboard focus contract -----------------------------------------------
    The keydown handler needs a document, so the two decisions it kept getting
    wrong live in web/keys.js and are asserted here. A helper with the right

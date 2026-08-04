@@ -21,6 +21,7 @@
    */
   const GEOM = {
     row: 20, // .drow height
+    fileHeader: 32, // .file-header height in the stream
     cardHead: 26,
     cardLine: 17,
     cardPad: 14,
@@ -57,7 +58,8 @@
   }
 
   function itemHeight(item, charsPerLine) {
-    if (!item || item.k !== "comment") return GEOM.row;
+    if (item && item.k === "fileHeader") return GEOM.fileHeader;
+    if (!item || item.k !== "comment") return GEOM.row; // rows, folds, loading, note
     return GEOM.cardHead + GEOM.cardPad + commentLines(item.a, charsPerLine) * GEOM.cardLine;
   }
 
@@ -163,7 +165,7 @@
 
     const items = [];
     const pushRow = (u, i) => {
-      items.push({ k: "row", u, i });
+      items.push({ k: "row", u, i, f: file });
       if (!byLine.size) return;
       // A comment belongs under the line it is about, so it reads like a thread.
       const seen = new Set();
@@ -176,7 +178,7 @@
         for (const a of byLine.get(side + ":" + n) || []) {
           if (seen.has(a.id)) continue;
           seen.add(a.id);
-          items.push({ k: "comment", a });
+          items.push({ k: "comment", a, f: file });
         }
       }
     };
@@ -194,7 +196,7 @@
       if (expanded.has(id)) {
         for (let j = start; j < i; j++) pushRow(units[j], j);
       } else {
-        items.push({ k: "fold", id, count: i - start, from: start, to: i });
+        items.push({ k: "fold", id, count: i - start, from: start, to: i, f: file });
       }
     }
 
@@ -203,6 +205,71 @@
     for (const r of src) if (r.s && r.s.length > maxLineLen) maxLineLen = Math.min(r.s.length, 4000);
 
     return { items, effView, singleGutter, maxLineLen };
+  }
+
+  /**
+   * The whole review as one flat list: every selected file's items back to
+   * back, each behind a fileHeader row. Heights stay derived — header, loading
+   * and note rows are fixed — so the windowed list's prefix-sum index is exact
+   * before, during and after the per-file diffs arrive.
+   */
+  function buildStream({ files, selected, collapsed, perFile, annotations = [], view = "split", viewedSet = new Set() }) {
+    const items = [];
+    const segments = [];
+    let maxLineLen = 0;
+    let idx = 0;
+    const shown = files.filter((f) => selected.has(f.path));
+    for (const f of shown) {
+      const start = items.length;
+      const st = (perFile && perFile.get(f.path)) || {};
+      items.push({
+        k: "fileHeader",
+        f: f.path,
+        stats: f,
+        collapsed: collapsed.has(f.path),
+        viewed: viewedSet.has(f.path),
+        idx: idx++,
+        count: shown.length,
+      });
+      if (!collapsed.has(f.path)) {
+        if (!st.loaded) {
+          items.push({ k: "loading", f: f.path });
+        } else if (st.error || st.binary || st.tooBig || (st.empty && !(st.fullRows && st.fullRows.length))) {
+          const text = st.error
+            ? "Could not read this file."
+            : st.binary
+            ? "Binary file — nothing to diff."
+            : st.tooBig
+            ? "Diff too large to render — review it in your editor."
+            : st.mode
+            ? `Mode changed ${st.mode.old} → ${st.mode.new} — no content changed.`
+            : "Empty file.";
+          items.push({ k: "note", f: f.path, text });
+        } else {
+          const one = buildItems({
+            rows: st.rows,
+            fullRows: st.fullRows,
+            annotations,
+            file: f.path,
+            expanded: st.expanded || new Set(),
+            full: !!st.full,
+            view,
+          });
+          // Rows carry their segment's view so a pure-add file stays unified
+          // while its neighbor renders split — exactly the per-file rule today.
+          for (const it of one.items) {
+            if (it.k === "row") {
+              it.v = one.effView;
+              it.sg = one.singleGutter;
+            }
+            items.push(it);
+          }
+          if (one.maxLineLen > maxLineLen) maxLineLen = one.maxLineLen;
+        }
+      }
+      segments.push({ file: f.path, start, end: items.length });
+    }
+    return { items, segments, maxLineLen };
   }
 
   // --- navigation over the item list ---------------------------------------
@@ -219,11 +286,16 @@
         : null
       : null;
 
-  /** Index of the row showing `line` on `side`, or -1. */
-  const rowIndexFor = (items, side, line) =>
+  /**
+   * Index of the row showing `line` on `side`, or -1. `file` is optional; when
+   * given, only rows for that file match — needed because line numbers repeat
+   * across files in a stream.
+   */
+  const rowIndexFor = (items, side, line, file) =>
     items.findIndex(
       (it) =>
         it.k === "row" &&
+        (file == null || it.f === file) &&
         ((side === "new" && it.u.r && it.u.r.n === line) || (side === "old" && it.u.l && it.u.l.o === line))
     );
 
@@ -348,6 +420,7 @@
   exp.itemHeight = itemHeight;
   exp.toSplit = toSplit;
   exp.buildItems = buildItems;
+  exp.buildStream = buildStream;
   exp.rowLine = rowLine;
   exp.rowIndexFor = rowIndexFor;
   exp.findChange = findChange;
