@@ -943,7 +943,7 @@ function rebuildStream() {
   revalidatePin(); // heights moved: the pin may no longer describe anything
   updateStickyHeader(true); // a file arriving can move both the top file and the count
   promotePendingFocus();
-  updateFoldToggle(); // every fold and selection change funnels through here
+  updateFoldToggle(); // fold changes and straggler loads land here without a render()
 }
 
 /** Sidebar click / j/k target: make sure it's in the stream, then go there. */
@@ -1533,6 +1533,7 @@ function runSearch(q, jump = true) {
   S.search.idx = Math.min(at, Math.max(0, hits.length - 1));
   $("#searchCount").textContent = hits.length ? `${S.search.idx + 1}/${hits.length}` : q ? "no matches" : "";
   if (jump && hits.length) {
+    S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
     diffVL.scrollToIndex(hits[0], true);
     pinAfterScroll(S.items[hits[0]] && S.items[hits[0]].f);
   }
@@ -1541,6 +1542,7 @@ function runSearch(q, jump = true) {
 function stepSearch(d) {
   const h = S.search.hits;
   if (!h.length) return;
+  S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
   S.search.idx = (S.search.idx + d + h.length) % h.length;
   $("#searchCount").textContent = `${S.search.idx + 1}/${h.length}`;
   const at = h[S.search.idx];
@@ -1613,10 +1615,17 @@ function anchorFocusIn(path) {
     matters because a miss must never touch `S.focus`: by the time the retry
     would have fired, the reader may have set it some other way (a gutter
     click via openPopover, a jump from the comments panel) — this path only
-    ever sets `S.focus` on a genuine hit, never clears it. */
+    ever sets `S.focus` on a genuine hit, never clears it.
+    The same applies before the miss check: arming set `S.focus = null`, so a
+    non-null cursor here means one of those paths claimed it since — the
+    anchor lost the race and must not steal the cursor back. */
 function promotePendingFocus() {
   const path = S.pendingFocusFile;
   if (!path) return;
+  if (S.focus) {
+    S.pendingFocusFile = null;
+    return;
+  }
   const st = S.perFile.get(path);
   if (!st || !st.loaded) return; // still fetching — leave the anchor armed
   S.pendingFocusFile = null; // consume now: loaded means this is the one shot
@@ -1886,6 +1895,7 @@ function render() {
   renderCounts();
   syncViewedToggle();
   renderDiff();
+  updateFoldToggle(); // selection changes come through here, not rebuildStream
 }
 
 /** Something the reviewer owns changed: persist it (debounced) and repaint. */
