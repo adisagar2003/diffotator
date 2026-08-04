@@ -43,7 +43,7 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .ptext .a{color:#4fae63}.ptext .d{color:#d1596a}
 .tgl.viewed{padding:1px 7px;border:1px solid var(--border);border-radius:5px;background:var(--elev)}
 .tnode.seen .nm,.tnode.seen .stat{opacity:.45}
-.tnode.seen .caret{color:var(--ok);opacity:1;font-size:10px}
+.tnode.seen .caret{color:var(--ok);opacity:1;font-size:11px;font-weight:700}
 .chip.scope{color:#9fd0ff;border-color:#2d4c7e;background:#1b2a3f}
 .btn{
   height:26px;padding:0 11px;border-radius:6px;border:1px solid var(--border);
@@ -88,6 +88,12 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .vsplit:hover{background:var(--accent-dim)}
 .hsplit{height:5px;flex:0 0 auto;cursor:row-resize;position:relative;z-index:5}
 .hsplit:hover{background:var(--accent-dim)}
+/* The grip: a centered pill that says "drag me" before the cursor ever gets
+   there. The 5px strip stays the hit area; this is only the visible part. */
+.vsplit::after,.hsplit::after{content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);border-radius:2px;background:var(--border)}
+.vsplit::after{width:3px;height:34px}
+.hsplit::after{width:34px;height:3px}
+.vsplit:hover::after,.hsplit:hover::after{background:var(--accent)}
 
 /* ---------- sidebar ---------- */
 .side-item{
@@ -177,10 +183,24 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .tnode .stat .a{color:#4fae63}.tnode .stat .d{color:#d1596a}
 .tnode .cmt{font-size:10px;color:var(--accent)}
 .tdir{color:var(--text-dim)}
+/* In or out of the stream. Hidden files still list; they just stop rendering.
+   The eye spans the full 21px row height so the hit target is the icon's cell,
+   not the 14px glyph. */
+.selbox{cursor:pointer;opacity:.7;flex:0 0 18px;height:100%;display:flex;align-items:center;justify-content:center;color:var(--text-dim)}
+.selbox svg{width:14px;height:14px}
+.selbox:hover{opacity:1;color:var(--text)}
+.selbox.on{color:var(--accent);opacity:.9}
+.selall{display:flex;align-items:center;gap:2px;flex:0 0 auto;font-size:11px;color:var(--muted)}
+.selall button{border:0;background:transparent;color:var(--text-dim);cursor:pointer;font-size:11px;padding:0 3px}
+.selall button:hover{color:var(--accent);text-decoration:underline}
+/* Fold-all / unfold-all as one flipping icon, the way editors draw it. */
+.icotog{border:0;background:transparent;color:var(--text-dim);cursor:pointer;flex:0 0 auto;display:flex;align-items:center;padding:3px;border-radius:4px}
+.icotog svg{width:14px;height:14px}
+.icotog:hover{color:var(--accent);background:var(--elev2)}
 
 /* ---------- diff ---------- */
 .diff-header{
-  height:29px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 10px;
+  height:32px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 10px;
   background:var(--panel);border-bottom:1px solid var(--border);font-size:12px;color:var(--text-dim);
   white-space:nowrap;overflow:hidden
 }
@@ -195,6 +215,13 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .diff-header .grow{flex:1}
 .diff-header .nav{display:flex;gap:2px}
 .diff-header .nav button{width:22px;height:20px;border-radius:4px;border:1px solid var(--border);background:var(--elev);cursor:pointer;font-size:10px;padding:0}
+.diff-header .caret{width:11px;flex:0 0 auto;color:var(--muted);font-size:9px;cursor:pointer}
+.diff-header .caret:hover{color:var(--text)}
+.diff-header .shbox{cursor:pointer;flex:0 0 auto;font-size:11px;opacity:.8}
+.diff-header .shbox:hover{opacity:1}
+.diff-header .shbox.on{color:var(--accent)}
+.diff-header .fp{cursor:pointer}
+.diff-header .fp:hover b{text-decoration:underline}
 
 .searchbar{
   display:flex;align-items:center;gap:5px;padding:4px 8px;background:var(--elev);
@@ -257,6 +284,47 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
   border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft);font-family:var(--ui)
 }
 .fold:hover{background:var(--elev);color:var(--text)}
+/* A file's bar inside the stream. Height is exactly RM.GEOM.fileHeader (32) —
+   box-sizing:border-box means the two borders live inside it — or the windowed
+   list's prefix-sum index would drift a pixel per file. */
+.fsh{
+  position:absolute;left:0;right:0;height:32px;display:flex;align-items:center;gap:8px;
+  padding:0 10px;background:var(--panel);border-top:1px solid var(--border);
+  border-bottom:1px solid var(--border);font-family:var(--ui);font-size:12px;
+  color:var(--text-dim);white-space:nowrap;overflow:hidden;cursor:pointer
+}
+.fsh:hover{background:var(--elev)}
+.fsh .caret{width:11px;flex:0 0 auto;color:var(--muted);font-size:9px}
+.fsh .fp{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
+.fsh.seen .fp{opacity:.6}
+.fsh.closed{color:var(--muted)}
+.fsh .vchip{font-size:10px;padding:0 6px;border-radius:9px;background:#173a24;border:1px solid #2b6b3e;color:#7fbf90}
+.fsh .old{color:var(--muted);overflow:hidden;text-overflow:ellipsis}
+.fsh .pos{font-size:11px;color:var(--muted)}
+.fsh .plus{color:#4fae63;font-family:var(--mono);font-size:11.5px}
+.fsh .minus{color:#d1596a;font-family:var(--mono);font-size:11.5px}
+/* Not a diff and not a fold — a sentence about why a file has nothing to show. */
+.fold.note{font-style:italic;cursor:default}
+.fold.note:hover{background:#1f2226;color:var(--muted)}
+/* In flight, not clickable — same shape as a fold, none of the affordance. */
+.fold.loading{cursor:default}
+.fold.loading:hover{background:#1f2226;color:var(--muted)}
+/* The finish card. Height is exactly RM.GEOM.allViewed (96) — border-box, so
+   the borders live inside it — or the prefix-sum index drifts. */
+.avc{
+  position:absolute;left:0;right:0;height:96px;box-sizing:border-box;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  background:var(--panel);border-top:1px solid var(--border);font-family:var(--ui)
+}
+.avc .av-title{font-size:14px;font-weight:600;color:var(--text)}
+.avc .av-sub{font-size:12px;color:var(--muted)}
+.avc .av-act{display:flex;align-items:center;gap:8px;margin-top:2px}
+.avc .av-act button{
+  padding:3px 12px;border-radius:5px;border:1px solid var(--border);
+  background:var(--elev);color:var(--text);cursor:pointer;font-size:12px
+}
+.avc .av-act button:hover{background:var(--elev2)}
+.avc .av-hint{font-size:11px;color:var(--muted)}
 .cmtcard{
   position:absolute;left:0;right:0;background:#20242c;border-top:1px solid var(--accent-dim);
   border-bottom:1px solid var(--accent-dim);border-left:3px solid var(--accent);
@@ -280,6 +348,8 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .empty-state{padding:44px 30px;text-align:center;color:var(--text-dim);font-family:var(--ui);line-height:1.75;font-size:13px}
 .empty-state .hint{color:var(--muted);font-size:12px}
 .empty-state b{color:var(--text)}
+/* The empty stream offers its own way out, so it has to read as clickable. */
+.empty-state b[data-selall]{color:var(--accent);cursor:pointer;text-decoration:underline}
 .diff-header .pos{font-size:11px;color:var(--muted);margin-right:8px}
 .btn:disabled{opacity:.45;cursor:not-allowed}
 

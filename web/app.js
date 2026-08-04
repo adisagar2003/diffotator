@@ -34,16 +34,27 @@ const S = {
   files: [],
   localCount: null, // working-tree changes, kept across scopes for the sidebar badge
   selFile: null,
-  diff: null, // {rows, binary, tooBig}
-  fullRows: null,
+  // One entry per path: {loaded, rows, fullRows, expanded, full, binary, tooBig, error, empty, mode}
+  perFile: new Map(),
+  desel: new Set(), // scoped keys; empty = everything selected (the default)
+  collapsed: new Set(), // scoped keys
+  segments: [],
+  /* A file shorter than the viewport can never scroll its header to the top, so
+     the sticky bar would rename the file we just jumped to. `pinnedSeg` holds
+     that file until the reader scrolls for themselves; `pinExpectedTop` is where
+     the programmatic scroll left the pane, so the pin's own scroll event does
+     not release it. */
+  pinnedSeg: null,
+  pinExpectedTop: 0,
+  treeDiff: null, // File Tree tab keeps the old one-file view
+  treeRows: null,
   view: "split",
-  full: false,
   tab: "changes",
   items: [],
-  expanded: new Set(),
   ann: [],
   viewed: new Set(),
   focus: null,
+  pendingFocusFile: null,
   treePaths: null,
   treeOpen: new Set(),
   fileOpen: new Set(),
@@ -62,12 +73,19 @@ const S = {
 // api
 // ---------------------------------------------------------------------------
 const cache = new Map();
+const apiUrl = (path, params) => `/api/${path}?${new URLSearchParams(params)}`;
 async function api(path, params = {}, { cached = false } = {}) {
-  const q = new URLSearchParams(params);
-  const url = `/api/${path}?${q}`;
+  const url = apiUrl(path, params);
   if (cached && cache.has(url)) return cache.get(url);
-  const p = fetch(url).then((r) => r.json());
-  if (cached) cache.set(url, p);
+  const p = fetch(url).then(async (r) => {
+    const body = await r.json();
+    if (!r.ok) throw new Error((body && body.error) || `request failed (${r.status})`);
+    return body;
+  });
+  if (cached) {
+    cache.set(url, p);
+    p.catch(() => cache.delete(url)); // a failure must not be replayed from cache
+  }
   return p;
 }
 /* One canonical string names a scope on the wire, in the request cache and in
@@ -155,10 +173,19 @@ function vlist(container, rowH, count, renderRow, heightOf) {
       emptyHtml = `<div class="empty-state">${html}</div>`;
       paint(true);
     },
-    scrollToIndex(i, center) {
+    /** Which item the viewport starts inside — what the sticky header mirrors. */
+    topIndex: () => {
+      if (heightOf && (!offsets || offsets.length !== state.count() + 1)) reindex();
+      return Math.max(0, Math.min(state.count() - 1, indexAt(container.scrollTop)));
+    },
+    /* `pad` is how much of what came before stays visible. The default keeps a
+       few lines of context above the target; jumping to a file passes 0 so its
+       header lands at the very top and the sticky bar names the file you
+       clicked rather than the tail of the one above it. */
+    scrollToIndex(i, center, pad = 60) {
       if (heightOf && (!offsets || offsets.length !== state.count() + 1)) reindex();
       const y = topOf(i);
-      container.scrollTop = Math.max(0, center ? y - container.clientHeight / 2 : y - 60);
+      container.scrollTop = Math.max(0, center ? y - container.clientHeight / 2 : y - pad);
       paint(true);
     },
   };
@@ -370,18 +397,24 @@ const COMMIT_PAGE = 300;
 async function loadMoreCommits() {
   if (S.loadingMore || S.commitsDone) return;
   S.loadingMore = true;
-  const { commits } = await api("commits", {
-    limit: COMMIT_PAGE,
-    skip: S.commits.length,
-    ...(S.commitRev ? { rev: S.commitRev } : {}),
-  });
-  if (commits.length < COMMIT_PAGE) S.commitsDone = true;
-  if (commits.length) {
-    S.commits = S.commits.concat(commits);
-    S.graph = computeGraph(S.commits);
-    commitVL.refresh();
+  try {
+    // A failed page fetch must not take down the commit pane — leave the list
+    // as it was and let the next scroll tick try again.
+    const { commits } = await api("commits", {
+      limit: COMMIT_PAGE,
+      skip: S.commits.length,
+      ...(S.commitRev ? { rev: S.commitRev } : {}),
+    });
+    if (commits.length < COMMIT_PAGE) S.commitsDone = true;
+    if (commits.length) {
+      S.commits = S.commits.concat(commits);
+      S.graph = computeGraph(S.commits);
+      commitVL.refresh();
+    }
+  } catch {
+  } finally {
+    S.loadingMore = false;
   }
-  S.loadingMore = false;
 }
 $("#commitList").addEventListener(
   "scroll",
@@ -394,10 +427,17 @@ $("#commitList").addEventListener(
 
 async function loadCommits(select = true) {
   S.commitsDone = false;
-  const { commits } = await api("commits", {
-    limit: COMMIT_PAGE,
-    ...(S.commitRev ? { rev: S.commitRev } : {}),
-  });
+  let commits;
+  try {
+    // A failed side-panel fetch must not take down the page — leave whatever
+    // commit list was already on screen.
+    ({ commits } = await api("commits", {
+      limit: COMMIT_PAGE,
+      ...(S.commitRev ? { rev: S.commitRev } : {}),
+    }));
+  } catch {
+    return;
+  }
   if (commits.length < COMMIT_PAGE) S.commitsDone = true;
   S.commits = commits;
   S.graph = computeGraph(commits);
@@ -414,8 +454,12 @@ async function selectCommit(sha) {
   S.selCommit = sha;
   commitVL.refresh();
   setScope({ type: "commit", sha }, null, true);
-  const { meta } = await api("commit", { sha }, { cached: true });
-  renderCommitDetail(meta);
+  try {
+    // A failed side-panel fetch must not take down the page — leave whatever
+    // commit detail was already showing.
+    const { meta } = await api("commit", { sha }, { cached: true });
+    renderCommitDetail(meta);
+  } catch {}
 }
 
 function renderCommitDetail(m) {
@@ -448,26 +492,38 @@ async function setScope(scope, name, keepCommits) {
   // of its own, so it passes none and the row that got the reader here stays lit.
   if (name) S.scopeName = name;
   S.selFile = null;
-  S.diff = null;
-  S.fullRows = null;
+  S.perFile = new Map();
+  S.segments = [];
+  S.pinnedSeg = null; // a new scope can repeat a path; the old pin means nothing
+  S.focus = null; // …and the line cursor was pointing into the old stream
+  S.pendingFocusFile = null; // …and any armed promotion was waiting on the old stream too
   S.treePaths = null;
   $("#scopeChip").textContent = Scope.label(scope);
   if (!keepCommits) collapseCommits(scope.type !== "commit");
   sidebar();
-  const { files } = await api("files", scopeParams(), { cached: true });
+  let files;
+  try {
+    ({ files } = await api("files", scopeParams(), { cached: true }));
+  } catch {
+    // The existing no-changes empty state is the fallback — better than a dead
+    // scope switch that leaves the previous scope's files on screen.
+    files = [];
+  }
   if (seq !== scopeSeq) return;
   S.files = files;
   // The sidebar counts the working tree whatever scope is open, so remember it.
   if (Scope.isWorktree(scope)) S.localCount = files.length;
   render();
+  fetchStream(); // not awaited: each arrival repaints the stream it lands in
   // The File Tree pane is scope-specific and was just invalidated; without this
   // it stays empty until the reader happens to toggle tabs.
   if (S.tab === "tree") {
     await loadTree();
     if (seq !== scopeSeq) return; // a newer scope won while the tree was in flight
   }
-  const first = files[0];
-  if (first) selectFile(first.path);
+  // The stream shows every selected file, so there is nothing to "open" — the
+  // first path is only the cursor j/k and the viewed toggle start from.
+  S.selFile = files.length ? files[0].path : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -554,6 +610,21 @@ function renderFileTree() {
   box.innerHTML = out.join("") || `<div class="empty-state">No changes</div>`;
 }
 
+/** Move the sidebar's 'sel' highlight without rebuilding the pane. Scrolling
+    the stream crosses a file boundary every few ticks; a full renderFileTree
+    per crossing rebuilds up to 800 rows to change one class. */
+function updateTreeSel(path) {
+  const box = $("#fileTree");
+  const cur = box.querySelector(".tnode.sel");
+  if (cur && cur.dataset.file === path) return;
+  if (cur) cur.classList.remove("sel");
+  const next = box.querySelector(`.tnode[data-file="${CSS.escape(path)}"]`);
+  if (next) {
+    next.classList.add("sel");
+    next.scrollIntoView({ block: "nearest" });
+  }
+}
+
 // Viewed state is per scope: the same path in the worktree and in a commit are
 // different things to have read.
 const viewKey = (path) => scopeId() + "|" + path;
@@ -563,6 +634,74 @@ function setViewed(path, on) {
   const k = viewKey(path);
   on ? S.viewed.add(k) : S.viewed.delete(k);
   changed();
+}
+
+/* Selection and collapse are per scope for the same reason viewed is, and they
+   are stored as the *exceptions*: an empty `desel` means the whole review is in
+   the stream, which is what a fresh scope should show. */
+const isSelected = (path) => !S.desel.has(viewKey(path));
+function setSelected(path, on) {
+  const k = viewKey(path);
+  on ? S.desel.delete(k) : S.desel.add(k);
+  changed(); // render() → renderDiff() → buildItems() rebuilds the stream; no separate rebuild
+  if (!on) refocusOutOf(path);
+  if (on) fetchStream(); // a newly selected file may not be loaded yet
+}
+function selectAll(on) {
+  for (const f of S.files) {
+    const k = viewKey(f.path);
+    on ? S.desel.delete(k) : S.desel.add(k);
+  }
+  changed();
+  if (!on && S.focus) refocusOutOf(S.focus.file);
+  if (on) fetchStream();
+}
+const isCollapsed = (path) => S.collapsed.has(viewKey(path));
+function setCollapsed(path, on) {
+  const k = viewKey(path);
+  on ? S.collapsed.add(k) : S.collapsed.delete(k);
+  // Folding a file away moves every segment after it, so the sticky header has
+  // to be told; `rebuildStream` is the one path that keeps all of that in step.
+  rebuildStream();
+  if (on) refocusOutOf(path);
+  saveDraft();
+}
+
+/** Fold or unfold every selected file in one rebuild — per-file setCollapsed
+    would rebuild the stream once per file. */
+function collapseAll(on) {
+  for (const f of S.files) {
+    if (!isSelected(f.path)) continue;
+    const k = viewKey(f.path);
+    on ? S.collapsed.add(k) : S.collapsed.delete(k);
+  }
+  rebuildStream();
+  if (on && S.focus) refocusOutOf(S.focus.file);
+  saveDraft();
+}
+
+/**
+ * The line cursor cannot stay in a file whose rows just left the stream — a
+ * collapse or a deselect. `focusStep` would match nothing, fall back to row 0
+ * and teleport the reader to the top of the stream on the next arrow key, which
+ * is exactly the `v`-then-↓ flow. Re-anchor on the first row *after* where the
+ * file was, which is where `v` is taking them anyway; if the file is gone
+ * entirely (deselected, so there is no header left to measure from) there is no
+ * honest place below it, so drop the cursor and let the next arrow start over.
+ */
+function refocusOutOf(path) {
+  if (!S.focus || S.focus.file !== path) return;
+  const seg = S.segments.find((s) => s.file === path);
+  if (seg) {
+    for (let i = seg.end; i < S.items.length; i++) {
+      const l = S.items[i].k === "row" ? RM.rowLine(S.items[i]) : null;
+      if (l) {
+        S.focus = { file: S.items[i].f, side: l.side, line: l.line };
+        return;
+      }
+    }
+  }
+  S.focus = null;
 }
 
 function renderProgress() {
@@ -587,13 +726,24 @@ function syncViewedToggle() {
   if (box) box.checked = !!(S.selFile && isViewed(S.selFile));
 }
 
-/** Next file that has not been marked viewed, wrapping from the current one. */
+/** Next file that has not been marked viewed, wrapping from the current one.
+    Only selected files count: the v-loop walks the stream that is on screen. */
 const nextUnviewed = () =>
   RM.nextUnviewed(
-    S.files.map((f) => f.path),
+    S.files.map((f) => f.path).filter(isSelected),
     S.selFile,
     isViewed
   );
+
+/* Inline SVG so the icons follow currentColor through hover and theme —
+   an icon font or emoji would pin its own size and palette. */
+const svgIcon = (paths) =>
+  `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const EYE_PATHS = `<path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="1.9"/>`;
+const I_EYE = svgIcon(EYE_PATHS);
+const I_EYE_OFF = svgIcon(EYE_PATHS + `<path d="m3 13.5 10-11"/>`);
+const I_FOLD = svgIcon(`<path d="M4 2.5 8 6l4-3.5M4 13.5 8 10l4 3.5"/>`);
+const I_UNFOLD = svgIcon(`<path d="M4 6l4-3.5L12 6M4 10l4 3.5L12 10"/>`);
 
 function fileRow(path, m, depth, label) {
   const sel = S.selFile === path ? " sel" : "";
@@ -616,8 +766,16 @@ function fileRow(path, m, depth, label) {
   } else {
     name = esc(label);
   }
+  /* Only changed files can be in the stream, so only they get the show/hide
+     eye — on every tab. The File Tree lists the whole repo; its unchanged
+     files have no meta (`m`) and therefore nothing to select. An eye, not a
+     checkbox: ✓ is already taken by "viewed", and the two must not blur. */
+  const box = m
+    ? `<span class="selbox${isSelected(path) ? " on" : ""}" data-sel="${esc(path)}" title="${isSelected(path) ? "Hide from the stream" : "Show in the stream"}">${isSelected(path) ? I_EYE : I_EYE_OFF}</span>`
+    : "";
   return `<div class="tnode${sel}${seen}" data-file="${esc(path)}" style="padding-left:${6 + depth * 12}px" title="${esc(path)}">
     <span class="caret">${seen ? "✓" : ""}</span>
+    ${box}
     ${code ? `<span class="st ${code}">${code === "q" ? "?" : code}</span>` : "📄"}
     <span class="nm">${name}</span>
     ${n ? `<span class="cmt">🗨${n}</span>` : ""}
@@ -637,9 +795,41 @@ $("#fileTree").addEventListener("click", (e) => {
     renderFileTree();
     return;
   }
+  // The checkbox sits inside the file row, so it has to be answered first.
+  const sb = e.target.closest(".selbox[data-sel]");
+  if (sb) {
+    setSelected(sb.dataset.sel, !isSelected(sb.dataset.sel));
+    return;
+  }
   const f = e.target.closest(".tnode[data-file]");
-  if (f) selectFile(f.dataset.file);
+  if (f) scrollToFile(f.dataset.file);
 });
+
+/** all / none, wherever it is drawn: the file pane's header, or an empty stream. */
+function selAllClick(e) {
+  if (e.target.closest("[data-selall]")) return selectAll(true), true;
+  if (e.target.closest("[data-selnone]")) return selectAll(false), true;
+  if (e.target.closest("[data-foldtoggle]")) return collapseAll(!allShownFolded()), true;
+  return false;
+}
+document.querySelector(".filter-row").addEventListener("click", selAllClick);
+
+/** One toggle, code-editor style: it folds everything until everything is
+    folded, then it unfolds. The icon and tooltip say which way it will act. */
+const allShownFolded = () => {
+  const shown = S.files.filter((f) => isSelected(f.path));
+  return shown.length > 0 && shown.every((f) => isCollapsed(f.path));
+};
+function updateFoldToggle() {
+  const b = document.querySelector("[data-foldtoggle]");
+  if (!b) return;
+  const folded = allShownFolded();
+  b.innerHTML = folded ? I_UNFOLD : I_FOLD;
+  const label = folded ? "Unfold all files" : "Fold all files";
+  b.title = label;
+  b.setAttribute("aria-label", label);
+}
+updateFoldToggle(); // scripts load after the DOM; seed the icon before any stream exists
 
 function setListMode(on) {
   S.listMode = on;
@@ -658,47 +848,201 @@ $("#fileFilter").addEventListener("input", (e) => {
 // ---------------------------------------------------------------------------
 // diff loading + rendering
 // ---------------------------------------------------------------------------
-let loadTimer = null;
-async function selectFile(path) {
-  S.selFile = path;
-  S.expanded.clear();
-  renderFileTree();
-  syncViewedToggle();
-  if (S.tab === "commit") setTab("changes");
-  $("#diffBody").scrollTop = 0;
-  // Most files land in well under 100ms; a spinner that fast reads as a flicker.
-  clearTimeout(loadTimer);
-  loadTimer = setTimeout(() => {
-    if (S.selFile === path && !S.diff && !S.fullRows) diffVL.setEmpty("Loading…");
-  }, 150);
+/** Fetch one file's diff and slot it into the stream. Shared by the stream
+    filler and any jump that must wait for a specific file. Returns after the
+    store+rebuild; a scope change mid-flight discards the arrival. */
+async function loadFileDiff(path) {
+  const sid = scopeId();
+  const params = { ...scopeParams(), file: path };
+  try {
+    /* No `full: "1"` here. The diff already arrives with full context, so
+       "Full file" only has to stop folding — asking for the whole file as
+       well would render every line while the checkbox read unchecked, and
+       would make the empty/mode-only notes unreachable. Only the File Tree
+       tab, which has no diff, fetches whole files. */
+    const r = await api("diff", params, { cached: true });
+    if (scopeId() !== sid) return; // scope changed mid-flight
+    const d = r.diff || {};
+    S.perFile.set(path, {
+      loaded: true,
+      rows: d.rows || null,
+      fullRows: null,
+      expanded: new Set(),
+      full: false,
+      binary: d.binary,
+      tooBig: d.tooBig,
+      error: d.error,
+      empty: d.empty,
+      mode: d.mode,
+    });
+  } catch {
+    if (scopeId() !== sid) return; // scope changed mid-flight
+    // A rejected fetch would otherwise cache its own rejection forever —
+    // every future read of this url replays the same failure. Evict it so
+    // the next fetchStream (a fresh scope, a retry) gets a clean attempt.
+    cache.delete(apiUrl("diff", params));
+    S.perFile.set(path, {
+      loaded: true,
+      rows: null,
+      fullRows: null,
+      expanded: new Set(),
+      full: false,
+      error: "could not load diff",
+    });
+  }
+  rebuildStream();
+}
 
-  S.diff = null;
-  S.fullRows = null;
-  S.fullMeta = null;
+let streamSeq = 0;
+/** Fetch every selected, not-yet-loaded file, a few at a time, in list order.
+    Each arrival re-slots into the stream; the reader reads while it fills. */
+async function fetchStream() {
+  const seq = ++streamSeq;
+  const queue = S.files.map((f) => f.path).filter((p) => isSelected(p) && !(S.perFile.get(p) || {}).loaded);
+  const CONCURRENCY = 4;
+  let next = 0;
+  const worker = async () => {
+    // Selection/scope churn stops a worker from pulling further queue entries;
+    // an entry already in flight still stores its arrival — loadFileDiff's own
+    // scope guard covers that, and storing into a file the reader deselected
+    // mid-flight is harmless, since deselected files simply aren't rendered.
+    while (next < queue.length && seq === streamSeq) {
+      const path = queue[next++];
+      await loadFileDiff(path);
+    }
+  };
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+}
+
+/* Every file unchecked is a choice, not a failure — offer the way back. Shared
+   by renderDiff and rebuildStream so the empty-stream hint stays one string. */
+const nothingSelectedHint = () => `Nothing selected. <b data-selall>Select all</b> to fill the stream.`;
+
+/** Rebuild items from current per-file state and repaint, keeping scroll.
+    `refresh`, not `paint`: paint keeps a stale empty state on screen and only
+    reindexes when the item count changes. `refresh` never touches scrollTop.
+    A straggler fetch can land after the reader hit "none" — `refresh` alone
+    would blank the pane with no way back, so an empty result gets the same
+    hint `renderDiff` shows instead of a silent, dead-end empty stream. */
+function rebuildStream() {
+  buildItems();
+  if (!S.items.length && S.files.length) diffVL.setEmpty(nothingSelectedHint());
+  else diffVL.refresh();
+  renderProgress();
+  revalidatePin(); // heights moved: the pin may no longer describe anything
+  updateStickyHeader(true); // a file arriving can move both the top file and the count
+  promotePendingFocus();
+  updateFoldToggle(); // fold changes and straggler loads land here without a render()
+}
+
+/** Sidebar click / j/k target: make sure it's in the stream, then go there. */
+function scrollToFile(path) {
+  S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
+  if (S.tab === "tree") return selectTreeFile(path);
+  // #commitDetail overlays the diff pane on the Commit tab, so a file click or
+  // j/k landing there would scroll a pane the reader cannot see.
+  if (S.tab === "commit") setTab("changes");
+  if (!isSelected(path)) return setSelected(path, true), scrollToFile(path);
+  /* Nothing else guarantees the stream matches this tab: the File Tree branch
+     of buildItems() clears the segments, setTab rebuilds nothing, and at boot
+     renderDiff returns before buildItems while there is no selected file. An
+     empty list here means stale state, not "no such file" — rebuild rather
+     than swallow the click. */
+  if (!S.segments.length) buildItems();
+  const seg = S.segments.find((s) => s.file === path);
+  if (!seg) return;
+  S.selFile = path;
+  // pad 0: the file's own header lands at the top, so the sticky bar agrees
+  // with the row that was just clicked instead of naming the file above it.
+  diffVL.scrollToIndex(seg.start, false, 0);
+  pinAfterScroll(path);
+  updateTreeSel(path);
+  syncViewedToggle();
+  updateStickyHeader(true);
+}
+
+/* --- the header pin -------------------------------------------------------
+   Every jump in this file can fall short of what it aimed at: the pane cannot
+   scroll past total − clientHeight, so landing in the last file, when that file
+   is shorter than the viewport, still leaves an earlier segment at the top.
+   `topIndex()` would then name the wrong file, `updateStickyHeader` would
+   overwrite the `S.selFile` the jump just set, and `v` would mark a file the
+   reader never looked at. So whoever scrolled says which file they *meant*, and
+   the header honors that pin until the reader scrolls for themselves — the
+   scroll listener releases it the moment scrollTop moves off `pinExpectedTop`.
+   Three rules keep it honest: only pin when the pane cannot do better
+   (`pinHolds`), always repaint when the pin changes (`setPin`), and re-test it
+   whenever heights move (`revalidatePin`). */
+
+/** Does `file` still need a pin? Only when the pane is bottomed out — that is
+    the one place a target cannot climb any higher. Anywhere else a jump that did
+    not reach the top simply scrolled where it was asked to (centered, say), and
+    the viewport is right. */
+function pinHolds(file) {
+  const body = $("#diffBody");
+  const seg = file ? S.segments.find((s) => s.file === file) : null;
+  const atEnd = body.scrollTop >= body.scrollHeight - body.clientHeight - 1;
+  return !!seg && atEnd && segmentAt(diffVL.topIndex()) !== seg;
+}
+
+/** Set (or drop) the pin and repaint. The repaint is not optional: a jump that
+    did not move `scrollTop` — the pane was already bottomed out — fires no
+    scroll event, so nothing else would ever tell the header, and `v` would go
+    on marking the file the viewport happens to start in. */
+function setPin(file) {
+  S.pinExpectedTop = $("#diffBody").scrollTop; // read back: the browser clamps it
+  if (S.pinnedSeg === (file || null)) return;
+  S.pinnedSeg = file || null;
+  updateStickyHeader(true);
+}
+
+function pinAfterScroll(file) {
+  setPin(pinHolds(file) ? file : null);
+}
+
+/** Heights moved under the pin — a late file arriving above the viewport, a fold
+    opening — without any scroll event to release it, and the pinned file may now
+    be off screen entirely. Re-run its own test rather than trust it. */
+function revalidatePin() {
+  if (!S.pinnedSeg) return;
+  if (!pinHolds(S.pinnedSeg)) setPin(null);
+  else S.pinExpectedTop = $("#diffBody").scrollTop; // reflow may have moved it
+}
+
+/** j/k: one file along, in the order the reader is actually looking at.
+    In the stream that is the segment list — unselected files are not on screen,
+    so walking `S.files` would step onto a file that has no header to land on.
+    Where the walk starts is the file under the sticky bar, not `S.selFile`:
+    they agree, but the viewport is the source of truth for "where am I". */
+function stepFile(dir) {
   if (S.tab === "tree") {
-    const { full } = await api("file", { ...scopeParams(), file: path }, { cached: true });
-    if (S.selFile !== path) return;
-    clearTimeout(loadTimer);
-    S.diff = null;
-    S.fullRows = full && full.rows ? full.rows : null;
-    S.fullMeta = full;
-    renderDiff();
+    const files = S.treePaths || [];
+    const next = files[files.indexOf(S.selFile) + dir];
+    if (next) selectTreeFile(next);
     return;
   }
-  /* No `full: "1"` here. The diff already arrives with full context, so "Full
-     file" only has to stop folding — asking for the whole file as well left
-     S.fullRows populated for every file, which rendered the entire file while
-     the checkbox read unchecked and made the empty/mode-only states below
-     unreachable. Only the File Tree tab, which has no diff, needs it. */
-  const r = await api("diff", { ...scopeParams(), file: path }, { cached: true });
-  if (S.selFile !== path) return;
-  clearTimeout(loadTimer);
-  S.diff = r.diff;
+  const seg = currentSeg();
+  // No segment yet (nothing scrolled, nothing selected): `j` opens at the top.
+  const next = seg ? S.segments[S.segments.indexOf(seg) + dir] : dir > 0 ? S.segments[0] : null;
+  if (next) scrollToFile(next.file);
+}
+
+/** File Tree tab: unchanged behavior — fetch whole file, show alone. */
+async function selectTreeFile(path) {
+  S.selFile = path;
+  renderFileTree();
+  try {
+    const { full } = await api("file", { ...scopeParams(), file: path }, { cached: true });
+    if (S.selFile !== path) return;
+    S.treeRows = full && full.rows ? full.rows : null;
+    S.treeDiff = full;
+  } catch (e) {
+    if (S.selFile !== path) return;
+    // renderTreeFile's existing meta.error branch renders "Could not read this file."
+    S.treeDiff = { error: String((e && e.message) || e) };
+    S.treeRows = null;
+  }
   renderDiff();
-  // warm the next file so j/k feels instant
-  const i = S.files.findIndex((f) => f.path === path);
-  const nx = S.files[i + 1];
-  if (nx) api("diff", { ...scopeParams(), file: nx.path }, { cached: true });
 }
 
 const annKey = RM.annKey;
@@ -706,18 +1050,32 @@ const annIndex = () => RM.annIndex(S.ann);
 
 /** Hand the current state to the review model and keep what it returns. */
 function buildItems() {
-  const out = RM.buildItems({
-    rows: S.diff && S.diff.rows,
-    fullRows: S.fullRows,
+  if (S.tab === "tree") {
+    // File Tree keeps the old one-file view: whole file, no stream.
+    const out = RM.buildItems({
+      fullRows: S.treeRows,
+      annotations: S.ann,
+      file: S.selFile,
+      expanded: new Set(),
+      full: true,
+      view: S.view,
+    });
+    S.items = out.items.map((it) => (it.k === "row" ? { ...it, v: out.effView, sg: out.singleGutter } : it));
+    S.segments = [];
+    sizePan(out.maxLineLen * S.charW + 24);
+    return;
+  }
+  const out = RM.buildStream({
+    files: S.files,
+    selected: new Set(S.files.map((f) => f.path).filter(isSelected)),
+    collapsed: new Set(S.files.map((f) => f.path).filter(isCollapsed)),
+    perFile: S.perFile,
     annotations: S.ann,
-    file: S.selFile,
-    expanded: S.expanded,
-    full: S.full,
     view: S.view,
+    viewedSet: new Set(S.files.map((f) => f.path).filter(isViewed)),
   });
   S.items = out.items;
-  S.effView = out.effView;
-  S.singleGutter = out.singleGutter;
+  S.segments = out.segments;
   sizePan(out.maxLineLen * S.charW + 24);
 }
 
@@ -725,8 +1083,11 @@ function buildItems() {
 function sizePan(contentW) {
   const body = $("#diffBody");
   const bar = $("#hscroll");
-  const gut = S.effView === "split" ? 48 : S.singleGutter ? 48 : 96;
-  const visible = (body.clientWidth || 800) / (S.effView === "split" ? 2 : 1) - gut;
+  /* Segments can mix split and unified, so there is no one effective view to
+     read here. `S.view` is the *requested* view — close enough for a scrollbar
+     bound, and a conservative gutter errs toward "more scrollable". */
+  const gut = 96; // conservative: widest gutter any segment can have
+  const visible = (body.clientWidth || 800) / (S.view === "split" ? 2 : 1) - gut;
   S.panMax = Math.max(0, contentW - visible);
   $("#hscrollInner").style.width = contentW + "px";
   bar.classList.toggle("off", S.panMax < 2);
@@ -791,33 +1152,79 @@ const ROW_HTML = {
     </div>`;
   },
 
+  /* Fold ids repeat across the stream ("f12" exists in every file), so the
+     marker has to name the file it belongs to or a click would expand the
+     wrong one. */
   fold(item, top) {
-    return `<div class="fold" style="top:${top}px" data-fold="${item.id}">
+    return `<div class="fold" style="top:${top}px" data-fold="${item.id}" data-file="${esc(item.f)}">
       <span>⌄</span> ${item.count} unmodified line${item.count === 1 ? "" : "s"} — click to expand</div>`;
   },
 
+  /** The bar between two files: name, counts, position, collapse toggle. */
+  fileHeader(item, top) {
+    const s = item.stats || {};
+    return `<div class="fsh${item.collapsed ? " closed" : ""}${item.viewed ? " seen" : ""}"
+        style="top:${top}px" data-fhead="${esc(item.f)}" title="${esc(item.f)}">
+      <span class="caret">${item.collapsed ? "▸" : "▾"}</span>
+      <span class="fp">${esc(item.f)}</span>
+      ${item.viewed ? `<span class="vchip">✓ viewed</span>` : ""}
+      ${s.oldPath ? `<span class="old">← ${esc(s.oldPath)}</span>` : ""}
+      <span class="grow"></span>
+      <span class="pos">${item.idx + 1} of ${item.count}</span>
+      <span class="plus">+${s.additions ?? 0}</span><span class="minus">−${s.deletions ?? 0}</span>
+    </div>`;
+  },
+
+  /* A file whose diff is still in flight, and a file that has no diff to show
+     (binary, too big, mode-only). Both are one fixed-height row, so the
+     prefix-sum index is exact before the fetch lands and after it does. */
+  loading(item, top) {
+    return `<div class="fold loading" style="top:${top}px">Loading ${esc(item.f)}…</div>`;
+  },
+
+  note(item, top) {
+    return `<div class="fold note" style="top:${top}px">${esc(item.text)}</div>`;
+  },
+
+  /** The review's finish line — appears when every selected file is viewed. */
+  allviewed(item, top) {
+    return `<div class="avc" style="top:${top}px">
+      <div class="av-title">All ${item.n} file${item.n === 1 ? "" : "s"} viewed</div>
+      ${item.comments ? `<div class="av-sub">${item.comments} comment${item.comments === 1 ? "" : "s"} drafted</div>` : ""}
+      <div class="av-act">${
+        item.comments
+          ? `<button data-finish-send>Send feedback</button><span class="av-hint">⌘⏎</span>`
+          : `<button data-finish-approve>Approve</button>`
+      }</div>
+    </div>`;
+  },
+
+  /* Every read below comes off the item, not off `S`: one stream mixes files,
+     and a segment carries its own effective view, gutter shape and path. */
   row(item, top, index) {
     const u = item.u;
-    const lang = extOf(S.selFile);
+    const lang = extOf(item.f);
     const hit = S.search.hitSet && S.search.hitSet.has(index)
       ? S.search.hits[S.search.idx] === index ? " hit cur" : " hit"
       : "";
     const idx = S.annIdx;
     const foc = S.focus;
 
+    const inFocusFile = !!foc && foc.file === item.f;
+
     const gutHtml = (side, num, cls) => {
       if (num == null) return `<div class="gut"></div>`;
-      const n = idx.get(annKey(S.selFile, side, num));
-      return `<div class="gut ${cls}${n ? " hasc" : ""}" data-side="${side}" data-line="${num}">
+      const n = idx.get(annKey(item.f, side, num));
+      return `<div class="gut ${cls}${n ? " hasc" : ""}" data-file="${esc(item.f)}" data-side="${side}" data-line="${num}">
         <span class="plus">+</span>${num}${n ? `<span class="cmtbadge">${n}</span>` : ""}</div>`;
     };
 
-    if (S.effView === "unified") {
+    if ((item.v || "unified") === "unified") {
       const r = u.uni;
       if (r.t === "gap") return `<div class="fold" style="top:${top}px">⋯</div>`;
       const cls = r.t === "add" ? "add" : r.t === "del" ? "del" : "";
-      const focused = foc && foc.line === (r.n ?? r.o) && foc.file === S.selFile ? " focus" : "";
-      const gutters = S.singleGutter
+      const focused = inFocusFile && foc.line === (r.n ?? r.o) ? " focus" : "";
+      const gutters = item.sg
         ? gutHtml("new", r.n ?? r.o ?? null, cls)
         : gutHtml("old", r.o ?? null, cls) + gutHtml("new", r.n ?? null, cls);
       return `<div class="drow${focused}${hit}" style="top:${top}px">
@@ -838,8 +1245,8 @@ const ROW_HTML = {
     }
     const lcls = u.t === "chg" ? "del" : "";
     const rcls = u.t === "chg" ? "add" : "";
-    const focL = foc && foc.side === "old" && L && foc.line === L.o ? " focus" : "";
-    const focR = foc && foc.side === "new" && R && foc.line === R.n ? " focus" : "";
+    const focL = inFocusFile && foc.side === "old" && L && foc.line === L.o ? " focus" : "";
+    const focR = inFocusFile && foc.side === "new" && R && foc.line === R.n ? " focus" : "";
     return `<div class="drow${focL || focR}${hit}" style="top:${top}px">
       <div class="side">
         ${gutHtml("old", L ? L.o ?? null : null, lcls)}
@@ -864,18 +1271,24 @@ const diffVL = vlist(
   itemHeight
 );
 
+/**
+ * The Changes tab is one stream: every selected file, back to back, each behind
+ * its own header row. There is no "the file" for the pane to describe any more,
+ * so the pane header is not written here — `updateStickyHeader` mirrors whatever
+ * the viewport is inside, on every scroll tick. The File Tree tab still shows
+ * one whole file and still owns its own header, below.
+ */
 function renderDiff() {
   S.annIdx = annIndex();
-  const f = S.files.find((x) => x.path === S.selFile);
-  const path = S.selFile || "";
-  const parts = path.split("/");
-  const name = parts.pop();
   const head = $("#diffHeader");
+  if (S.tab === "tree") return renderTreeFile(head);
 
-  if (!path) {
+  if (!S.files.length) {
     head.innerHTML = "";
+    head.dataset.file = "";
     S.items = [];
-    const base = S.ov.base && S.ov.base.ref;
+    S.segments = [];
+    const base = S.ov && S.ov.base && S.ov.base.ref; // a tab click can land here before boot's first overview fetch resolves
     diffVL.setEmpty(
       S.scope.type === "worktree"
         ? `Working tree is clean — nothing uncommitted to review.<br><span class="hint">` +
@@ -886,36 +1299,61 @@ function renderDiff() {
     return;
   }
 
-  const meta = S.diff || S.fullMeta || {};
-  const alt = S.fullMeta || {};
+  buildItems();
+  if (!S.items.length) {
+    diffVL.setEmpty(nothingSelectedHint());
+  } else if (S.search.q) {
+    S.search.hitSet = null;
+    runSearch(S.search.q, false);
+  } else {
+    diffVL.refresh();
+  }
+  /* Not only on scroll: at boot nothing has scrolled yet, and after a rebuild
+     the position counter and the file at the top can both have moved. */
+  revalidatePin();
+  updateStickyHeader(true);
+}
 
+/** File Tree tab: one whole file, its own header, its own empty states. */
+function renderTreeFile(head) {
+  // The tree tab has no stream, but an early return below can skip buildItems()
+  // — the one place that would otherwise clear this — leaving the Changes tab's
+  // stale segments around for scrollToFile/currentSeg to trust.
+  S.segments = [];
+  const path = S.selFile || "";
+  head.dataset.file = ""; // the sticky header owns this on the other tab
+  if (!path) {
+    head.innerHTML = "";
+    S.items = [];
+    diffVL.setEmpty("Pick a file to read it.");
+    return;
+  }
+  const f = S.files.find((x) => x.path === path);
+  const parts = path.split("/");
+  const name = parts.pop();
+  const meta = S.treeDiff || {};
+
+  // No position counter here: progress is about the review, not about browsing.
   head.innerHTML = `
     <span class="fp" title="${esc(path)}">${esc(parts.join("/"))}${parts.length ? "/" : ""}<b>${esc(name)}</b></span>
     ${f ? `<span class="plus">+${f.additions}</span><span class="minus">−${f.deletions}</span>` : ""}
-    ${meta.mode ? `<span class="mode" title="file mode changed">${meta.mode.old} → ${meta.mode.new}</span>` : ""}
+    ${meta.mode ? `<span class="mode" title="file mode changed">${esc(meta.mode.old)} → ${esc(meta.mode.new)}</span>` : ""}
     ${f && f.oldPath ? `<span style="color:var(--muted)">← ${esc(f.oldPath)}</span>` : ""}
     <span class="grow"></span>
-    ${(() => {
-      // Position is about progress through the review, so it only means
-      // something in the changed-files list — not while browsing the repo.
-      if (S.tab === "tree") return "";
-      const i = S.files.findIndex((x) => x.path === path);
-      return i >= 0 ? `<span class="pos">${i + 1} of ${S.files.length}</span>` : "";
-    })()}
     <div class="nav"><button data-nav="prev" title="Previous change (p)">▲</button><button data-nav="next" title="Next change (n)">▼</button></div>`;
 
   const problem =
-    meta.error || alt.error
-      ? `Could not read this file.<br><span class="hint">${esc(meta.error || alt.error)}</span>`
-      : meta.binary || alt.binary
+    meta.error
+      ? `Could not read this file.<br><span class="hint">${esc(meta.error)}</span>`
+      : meta.binary
       ? "Binary file — nothing to diff."
-      : meta.tooBig || alt.tooBig
+      : meta.tooBig
       ? `Diff is too large to render${meta.changed ? ` (${meta.changed.toLocaleString()} changed lines)` : ""}.` +
         `<br><span class="hint">Review it in your editor instead.</span>`
-      : meta.empty && !(S.fullRows && S.fullRows.length)
+      : meta.empty && !(S.treeRows && S.treeRows.length)
       ? // A chmod has no content to show, and "Empty file." would be a lie.
         meta.mode
-        ? `Mode changed — <b>${meta.mode.old} → ${meta.mode.new}</b>.` +
+        ? `Mode changed — <b>${esc(meta.mode.old)} → ${esc(meta.mode.new)}</b>.` +
           `<br><span class="hint">No content changed.</span>`
         : f && f.status === "deleted"
         ? "File deleted — it was empty."
@@ -936,12 +1374,88 @@ function renderDiff() {
   diffVL.refresh();
 }
 
+/** Which file's segment the viewport starts inside. */
+const segmentAt = (idx) => {
+  let seg = null;
+  for (const s of S.segments) {
+    if (s.start <= idx) seg = s;
+    else break;
+  }
+  return seg;
+};
+
+/** Which file the reader is on: the pin if one is set (see `scrollToFile`),
+    otherwise whatever the viewport starts inside. A pin dies with the segment it
+    names, so a rebuild that drops the file cannot leave the header stuck. */
+function currentSeg() {
+  const pinned = S.pinnedSeg ? S.segments.find((s) => s.file === S.pinnedSeg) : null;
+  if (S.pinnedSeg && !pinned) S.pinnedSeg = null;
+  return pinned || segmentAt(diffVL.topIndex());
+}
+
+/** The pane header mirrors the file the reader is on — GitHub's sticky bar. */
+function updateStickyHeader(force) {
+  if (S.tab === "tree") return; // tree tab: renderTreeFile owns the header
+  const seg = currentSeg();
+  const head = $("#diffHeader");
+  if (!seg) {
+    head.innerHTML = "";
+    head.dataset.file = ""; // or the next scroll back into this file would find a match and skip
+    return;
+  }
+  if (!force && head.dataset.file === seg.file) return; // cheap on every scroll tick
+  head.dataset.file = seg.file;
+  // "Full file" is per file now, so the box describes whichever one is on top.
+  $("#chkFull").checked = !!(S.perFile.get(seg.file) || {}).full;
+  if (S.selFile !== seg.file) {
+    S.selFile = seg.file;
+    updateTreeSel(seg.file); // incremental: scroll crossings must not rebuild the pane
+    syncViewedToggle();
+  }
+  const f = S.files.find((x) => x.path === seg.file) || {};
+  const i = S.segments.indexOf(seg);
+  const collapsed = isCollapsed(seg.file);
+  const viewed = isViewed(seg.file);
+  head.innerHTML = `
+    <span class="caret" data-shfold title="${collapsed ? "Expand" : "Collapse"} this file">${collapsed ? "▸" : "▾"}</span>
+    <span class="shbox${viewed ? " on" : ""}" data-shviewed title="Mark viewed — does not fold the file">${viewed ? "☑" : "☐"}</span>
+    <span class="fp" data-shjump title="${esc(seg.file)} — click to jump to the top of this file"><b>${esc(seg.file)}</b></span>
+    <span class="plus">+${f.additions ?? 0}</span><span class="minus">−${f.deletions ?? 0}</span>
+    <span class="grow"></span>
+    <span class="pos">${i + 1} of ${S.segments.length}</span>
+    <div class="nav"><button data-nav="prev" title="Previous change (p)">▲</button><button data-nav="next" title="Next change (n)">▼</button></div>`;
+}
+/* Bound, not passed by reference: the listener would hand the scroll event in
+   as `force` and rewrite the header on every tick. */
+$("#diffBody").addEventListener(
+  "scroll",
+  () => {
+    /* Only a scroll the reader caused releases the pin. The programmatic scroll
+       in `scrollToFile` recorded the position it left behind, so its own scroll
+       event lands on the same scrollTop and is ignored. */
+    if (S.pinnedSeg && $("#diffBody").scrollTop !== S.pinExpectedTop) S.pinnedSeg = null;
+    updateStickyHeader();
+  },
+  { passive: true }
+);
+
 $("#diffBody").addEventListener("click", (e) => {
+  // Clicking a file's header folds that file away — the stream's own accordion.
+  const fh = e.target.closest(".fsh[data-fhead]");
+  if (fh) {
+    const p = fh.dataset.fhead;
+    setCollapsed(p, !isCollapsed(p));
+    return;
+  }
   const fold = e.target.closest(".fold[data-fold]");
   if (fold) {
-    S.expanded.add(fold.dataset.fold);
-    buildItems();
-    diffVL.refresh();
+    // Fold state belongs to a file; the marker says which one it came from.
+    const st = S.perFile.get(fold.dataset.file);
+    if (!st) return;
+    st.expanded.add(fold.dataset.fold);
+    // Opening a fold grows the stream, which can invalidate a header pin — the
+    // one rebuild path knows that; buildItems + refresh on their own did not.
+    rebuildStream();
     return;
   }
   const del = e.target.closest("[data-del]");
@@ -957,18 +1471,42 @@ $("#diffBody").addEventListener("click", (e) => {
     return;
   }
   const gut = e.target.closest(".gut[data-line]");
-  if (gut) openPopover(gut, S.selFile, gut.dataset.side, +gut.dataset.line);
+  if (gut) {
+    // The gutter names its own file: line numbers repeat down the stream.
+    openPopover(gut, gut.dataset.file, gut.dataset.side, +gut.dataset.line);
+    return;
+  }
+  if (e.target.closest("[data-finish-send]")) return openModal("annotated");
+  if (e.target.closest("[data-finish-approve]")) return openModal("approved");
+  // `setEmpty` writes its HTML inside #diffBody, so the empty stream's own
+  // "Select all" lands here rather than on the file pane's copy.
+  selAllClick(e);
 });
 
 $("#diffHeader").addEventListener("click", (e) => {
   const b = e.target.closest("[data-nav]");
-  if (b) jumpChange(b.dataset.nav === "next" ? 1 : -1);
+  if (b) return jumpChange(b.dataset.nav === "next" ? 1 : -1);
+  // The three mini-header controls act on the file the bar names. The tree
+  // tab's header sets dataset.file = "" and has none of these controls.
+  const file = $("#diffHeader").dataset.file;
+  if (!file) return;
+  if (e.target.closest("[data-shfold]")) return setCollapsed(file, !isCollapsed(file));
+  if (e.target.closest("[data-shviewed]")) return setViewed(file, !isViewed(file)); // viewed only — v's auto-fold stays on v
+  if (e.target.closest("[data-shjump]")) return scrollToFile(file);
 });
 
 function jumpChange(dir) {
-  const cur = Math.floor($("#diffBody").scrollTop / ROW);
-  const i = RM.findChange(S.items, cur, dir);
-  if (i >= 0) diffVL.scrollToIndex(i, true);
+  S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
+  // Rows are no longer uniform (headers, cards, notes), so scrollTop/ROW is not
+  // an item index any more — the list knows which item the viewport starts on.
+  /* Start from where the reader thinks they are: a pinned file's own header,
+     not the segment the clamped scroll left at the top of the viewport. */
+  const pinned = S.pinnedSeg ? currentSeg() : null;
+  const from = pinned && pinned.file === S.pinnedSeg ? pinned.start : diffVL.topIndex();
+  const i = RM.findChange(S.items, from, dir);
+  if (i < 0) return;
+  diffVL.scrollToIndex(i, true);
+  pinAfterScroll(S.items[i] && S.items[i].f);
 }
 
 /* Windowing means only ~60 rows exist in the DOM, so the browser's own Find
@@ -983,15 +1521,22 @@ function runSearch(q, jump = true) {
   // or an explicit next/prev jumps.
   S.search.idx = Math.min(at, Math.max(0, hits.length - 1));
   $("#searchCount").textContent = hits.length ? `${S.search.idx + 1}/${hits.length}` : q ? "no matches" : "";
-  if (jump && hits.length) diffVL.scrollToIndex(hits[0], true);
+  if (jump && hits.length) {
+    S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
+    diffVL.scrollToIndex(hits[0], true);
+    pinAfterScroll(S.items[hits[0]] && S.items[hits[0]].f);
+  }
   diffVL.refresh();
 }
 function stepSearch(d) {
   const h = S.search.hits;
   if (!h.length) return;
+  S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
   S.search.idx = (S.search.idx + d + h.length) % h.length;
   $("#searchCount").textContent = `${S.search.idx + 1}/${h.length}`;
-  diffVL.scrollToIndex(h[S.search.idx], true);
+  const at = h[S.search.idx];
+  diffVL.scrollToIndex(at, true);
+  pinAfterScroll(S.items[at] && S.items[at].f);
   diffVL.refresh();
 }
 function openSearch() {
@@ -1020,11 +1565,63 @@ $("#searchClose").onclick = closeSearch;
 
 /* A line cursor so a review can be driven without ever reaching for the mouse. */
 function moveFocus(dir) {
-  const next = RM.focusStep(S.items, S.focus, dir);
+  /* No real cursor yet, but `v` armed a pending anchor on a file that's still
+     fetching — the reader's attention is on that file (spec 1a), so step from
+     its first available row instead of restarting at row 0 of the stream. */
+  const anchorIndex = !S.focus && S.pendingFocusFile ? RM.firstRowFrom(S.items, S.segments, S.pendingFocusFile) : -1;
+  S.pendingFocusFile = null; // moving the cursor by hand cancels any pending anchor
+  const next = RM.focusStep(S.items, S.focus, dir, anchorIndex);
   if (!next) return;
-  S.focus = { file: S.selFile, side: next.side, line: next.line };
+  /* The row's own file, not `S.selFile`: stepping off the end of one file lands
+     in the next one before the sticky header has caught up with the scroll. */
+  S.focus = { file: S.items[next.index].f, side: next.side, line: next.line };
   diffVL.scrollToIndex(next.index, false);
+  pinAfterScroll(S.focus.file); // the cursor's file owns the header, reachable or not
   diffVL.refresh();
+}
+
+/** Land the cursor on the first change of `path` — the row the viewport just
+    scrolled to — so the next n/↓ continues from what the reader is looking at.
+    A still-loading segment has no honest row yet; remember the intent and
+    promotePendingFocus (called from rebuildStream) resolves it once. */
+function anchorFocusIn(path) {
+  const hit = RM.firstChangeRowIn(S.items, S.segments, path);
+  if (hit) {
+    S.focus = { file: path, side: hit.side, line: hit.line };
+    S.pendingFocusFile = null;
+    diffVL.refresh(); // repaint the focus ring
+  } else {
+    S.focus = null;
+    S.pendingFocusFile = path;
+  }
+}
+
+/** Resolve an armed `S.pendingFocusFile` exactly once, from `rebuildStream`.
+    One-shot: the moment the pending file is loaded, the anchor is consumed
+    (cleared) before anything else runs, whether or not it finds a row — a
+    loaded-but-rowless file (binary/empty/mode-only note) will never grow one,
+    so retrying on every future rebuild would just repeat the same miss. That
+    matters because a miss must never touch `S.focus`: by the time the retry
+    would have fired, the reader may have set it some other way (a gutter
+    click via openPopover, a jump from the comments panel) — this path only
+    ever sets `S.focus` on a genuine hit, never clears it.
+    The same applies before the miss check: arming set `S.focus = null`, so a
+    non-null cursor here means one of those paths claimed it since — the
+    anchor lost the race and must not steal the cursor back. */
+function promotePendingFocus() {
+  const path = S.pendingFocusFile;
+  if (!path) return;
+  if (S.focus) {
+    S.pendingFocusFile = null;
+    return;
+  }
+  const st = S.perFile.get(path);
+  if (!st || !st.loaded) return; // still fetching — leave the anchor armed
+  S.pendingFocusFile = null; // consume now: loaded means this is the one shot
+  const hit = RM.firstChangeRowIn(S.items, S.segments, path);
+  if (!hit) return; // loaded but rowless — nothing to promote to, ever
+  S.focus = { file: path, side: hit.side, line: hit.line };
+  diffVL.refresh(); // repaint the focus ring
 }
 
 /** Comment on the focused line, scrolling it into the DOM first if needed. */
@@ -1033,17 +1630,23 @@ function commentOnFocus() {
     moveFocus(1);
     if (!S.focus) return;
   }
+  /* Match the file too, everywhere: the stream has one gutter per file per line
+     number, so line+side alone would comment on the first file that has them. */
   const find = () =>
     [...document.querySelectorAll(".gut[data-line]")].find(
-      (x) => +x.dataset.line === S.focus.line && x.dataset.side === S.focus.side
+      (x) =>
+        x.dataset.file === S.focus.file && +x.dataset.line === S.focus.line && x.dataset.side === S.focus.side
     );
   let g = find();
   if (!g) {
-    const i = RM.rowIndexFor(S.items, S.focus.side, S.focus.line);
-    if (i >= 0) diffVL.scrollToIndex(i, true);
+    const i = RM.rowIndexFor(S.items, S.focus.side, S.focus.line, S.focus.file);
+    if (i >= 0) {
+      diffVL.scrollToIndex(i, true);
+      pinAfterScroll(S.focus.file);
+    }
     g = find();
   }
-  if (g) openPopover(g, S.selFile, S.focus.side, S.focus.line);
+  if (g) openPopover(g, S.focus.file, S.focus.side, S.focus.line);
 }
 
 // ---------------------------------------------------------------------------
@@ -1057,8 +1660,15 @@ function setTab(tab) {
   $("#commitDetail").hidden = tab !== "commit";
   $("#diffTools").style.visibility = tab === "commit" ? "hidden" : "visible";
   $("#chkViewed").parentElement.hidden = tab === "tree";
-  if (tab === "tree" && !S.treePaths) loadTree();
-  else renderFileTree();
+  if (tab === "tree" && !S.treePaths) {
+    loadTree();
+    return; // loadTree renders the file list itself once paths arrive
+  }
+  renderFileTree();
+  // Leaving the File Tree tab's one-file view behind in #diffBody until the next
+  // click made the stream tab look stuck; repaint here so it always shows the
+  // stream. The tree tab keeps rendering its own diff lazily, from a click.
+  if (tab !== "tree") renderDiff();
 }
 
 /**
@@ -1069,7 +1679,14 @@ function setTab(tab) {
  */
 async function loadTree() {
   const seq = scopeSeq;
-  const { paths } = await api("tree", scopeParams(), { cached: true });
+  let paths;
+  try {
+    // A failed side-panel fetch must not take down the page — leave whatever
+    // tree was already there and let the next tab click retry.
+    ({ paths } = await api("tree", scopeParams(), { cached: true }));
+  } catch {
+    return;
+  }
   if (seq !== scopeSeq) return;
   S.treePaths = paths;
   renderFileTree();
@@ -1089,14 +1706,35 @@ function toggleViewed(on) {
   if (!S.selFile) return;
   setViewed(S.selFile, on);
   if (!on) return;
+  setCollapsed(S.selFile, true); // GitHub's move: what you have read folds away
   const nx = nextUnviewed();
-  if (nx) selectFile(nx);
+  if (nx) {
+    scrollToFile(nx);
+    anchorFocusIn(nx); // cursor and viewport must agree after v
+  } else if (S.items.length) {
+    // Last v of the review: bring the finish card (last item) into view.
+    diffVL.scrollToIndex(S.items.length - 1, true);
+  }
 }
 
-$("#chkFull").onchange = (e) => {
-  S.full = e.target.checked;
-  renderDiff();
-};
+/* "Full file" belongs to a file, not to the pane: the stream shows many files
+   at once, so the box acts on whichever one the sticky header names and is
+   re-read from that file's state on every header update. */
+$("#chkFull").onchange = (e) => setFullOnCurrent(e.target.checked);
+function setFullOnCurrent(on) {
+  if (S.tab === "tree") {
+    $("#chkFull").checked = true; // the tree tab only ever shows whole files
+    return;
+  }
+  const st = S.selFile && S.perFile.get(S.selFile);
+  if (!st || !st.loaded) {
+    // Nothing has arrived to unfold yet — put the box back rather than lie.
+    $("#chkFull").checked = false;
+    return;
+  }
+  st.full = on;
+  rebuildStream();
+}
 
 // ---------------------------------------------------------------------------
 // annotations
@@ -1111,7 +1749,12 @@ function saveDraft() {
     fetch("/api/draft", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ann: S.ann, viewed: [...S.viewed] }),
+      body: JSON.stringify({
+        ann: S.ann,
+        viewed: [...S.viewed],
+        desel: [...S.desel],
+        collapsed: [...S.collapsed],
+      }),
     }).catch(() => {});
   }, 250);
 }
@@ -1120,10 +1763,15 @@ function loadDraft() {
   if (!d) return;
   S.ann = d.ann || [];
   S.viewed = new Set(d.viewed || []);
+  S.desel = new Set(d.desel || []);
+  S.collapsed = new Set(d.collapsed || []);
 }
 
 function lineText(file, side, line) {
-  const src = (S.diff && S.diff.rows) || S.fullRows || [];
+  const st = S.perFile.get(file);
+  /* `S.treeRows` is only ever the File Tree tab's one open file — falling back
+     to it from the stream would quote another file's line back at the reader. */
+  const src = (st && (st.rows || st.fullRows)) || (S.tab === "tree" ? S.treeRows : null) || [];
   for (const r of src) {
     if (side === "new" && r.n === line && r.t !== "del") return r.s;
     if (side === "old" && r.o === line && r.t !== "add") return r.s;
@@ -1236,6 +1884,7 @@ function render() {
   renderCounts();
   syncViewedToggle();
   renderDiff();
+  updateFoldToggle(); // selection changes come through here, not rebuildStream
 }
 
 /** Something the reviewer owns changed: persist it (debounced) and repaint. */
@@ -1262,10 +1911,23 @@ $("#cpList").addEventListener("click", async (e) => {
   if (!a) return;
   if (S.selFile !== a.file) {
     if (!S.files.some((f) => f.path === a.file)) setTab("tree");
-    await selectFile(a.file);
+    await scrollToFile(a.file);
   }
-  const target = RM.rowIndexFor(S.items, a.side, a.line);
-  if (target >= 0) diffVL.scrollToIndex(target, true);
+  // The file's diff may not have arrived yet — early after boot/scope switch,
+  // or because scrollToFile just re-selected a file that was deselected. Wait
+  // for it rather than racing rowIndexFor against a loading placeholder. Only
+  // for a stream jump: on the tree tab loadFileDiff's rebuildStream() would
+  // run buildItems against the stream and stomp renderTreeFile's own state
+  // (e.g. its "Could not read this file" note) with the stream's empty hint.
+  if (S.tab !== "tree" && !(S.perFile.get(a.file) || {}).loaded) await loadFileDiff(a.file);
+  // Line numbers repeat across a stream, so the file has to be part of the match.
+  const target = RM.rowIndexFor(S.items, a.side, a.line, a.file);
+  if (target >= 0) {
+    diffVL.scrollToIndex(target, true);
+    // A comment at the stream's bottom cannot scroll to the top of the pane;
+    // the pin is how every other jump keeps the sticky header honest here.
+    pinAfterScroll(a.file);
+  }
   S.focus = { file: a.file, side: a.side, line: a.line };
   renderDiff();
 });
@@ -1501,14 +2163,12 @@ document.addEventListener("keydown", (e) => {
   const key = Keys.shortcut(e);
   if (!key) return;
   e.preventDefault();
-  const files = S.tab === "tree" ? S.treePaths || [] : S.files.map((f) => f.path);
-  const i = files.indexOf(S.selFile);
   switch (key) {
     case "j":
-      if (i < files.length - 1) selectFile(files[i + 1]);
+      stepFile(1);
       break;
     case "k":
-      if (i > 0) selectFile(files[i - 1]);
+      stepFile(-1);
       break;
     case "n":
       jumpChange(1);
@@ -1520,8 +2180,7 @@ document.addEventListener("keydown", (e) => {
       setView(S.view === "split" ? "unified" : "split");
       break;
     case "f":
-      $("#chkFull").checked = !$("#chkFull").checked;
-      $("#chkFull").onchange({ target: $("#chkFull") });
+      setFullOnCurrent(!$("#chkFull").checked);
       break;
     case "v":
       toggleViewed(!isViewed(S.selFile));
