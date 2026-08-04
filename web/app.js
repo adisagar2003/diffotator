@@ -746,6 +746,16 @@ const nextUnviewed = () =>
     isViewed
   );
 
+/* Inline SVG so the icons follow currentColor through hover and theme —
+   an icon font or emoji would pin its own size and palette. */
+const svgIcon = (paths) =>
+  `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const EYE_PATHS = `<path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="1.9"/>`;
+const I_EYE = svgIcon(EYE_PATHS);
+const I_EYE_OFF = svgIcon(EYE_PATHS + `<path d="m3 13.5 10-11"/>`);
+const I_FOLD = svgIcon(`<path d="M4 2.5 8 6l4-3.5M4 13.5 8 10l4 3.5"/>`);
+const I_UNFOLD = svgIcon(`<path d="M4 6l4-3.5L12 6M4 10l4 3.5L12 10"/>`);
+
 function fileRow(path, m, depth, label) {
   const sel = S.selFile === path ? " sel" : "";
   const code = m ? STATUS_CODE[m.status] || "M" : "";
@@ -767,11 +777,12 @@ function fileRow(path, m, depth, label) {
   } else {
     name = esc(label);
   }
-  /* Only changed files can be in the stream, so only they get a checkbox — on
-     every tab. The File Tree lists the whole repo; its unchanged files have no
-     meta (`m`) and therefore nothing to select. */
+  /* Only changed files can be in the stream, so only they get the show/hide
+     eye — on every tab. The File Tree lists the whole repo; its unchanged
+     files have no meta (`m`) and therefore nothing to select. An eye, not a
+     checkbox: ✓ is already taken by "viewed", and the two must not blur. */
   const box = m
-    ? `<span class="selbox${isSelected(path) ? " on" : ""}" data-sel="${esc(path)}">${isSelected(path) ? "☑" : "☐"}</span>`
+    ? `<span class="selbox${isSelected(path) ? " on" : ""}" data-sel="${esc(path)}" title="${isSelected(path) ? "Hide from the stream" : "Show in the stream"}">${isSelected(path) ? I_EYE : I_EYE_OFF}</span>`
     : "";
   return `<div class="tnode${sel}${seen}" data-file="${esc(path)}" style="padding-left:${6 + depth * 12}px" title="${esc(path)}">
     <span class="caret">${seen ? "✓" : ""}</span>
@@ -809,11 +820,27 @@ $("#fileTree").addEventListener("click", (e) => {
 function selAllClick(e) {
   if (e.target.closest("[data-selall]")) return selectAll(true), true;
   if (e.target.closest("[data-selnone]")) return selectAll(false), true;
-  if (e.target.closest("[data-foldall]")) return collapseAll(true), true;
-  if (e.target.closest("[data-unfoldall]")) return collapseAll(false), true;
+  if (e.target.closest("[data-foldtoggle]")) return collapseAll(!allShownFolded()), true;
   return false;
 }
 document.querySelector(".filter-row").addEventListener("click", selAllClick);
+
+/** One toggle, code-editor style: it folds everything until everything is
+    folded, then it unfolds. The icon and tooltip say which way it will act. */
+const allShownFolded = () => {
+  const shown = S.files.filter((f) => isSelected(f.path));
+  return shown.length > 0 && shown.every((f) => isCollapsed(f.path));
+};
+function updateFoldToggle() {
+  const b = document.querySelector("[data-foldtoggle]");
+  if (!b) return;
+  const folded = allShownFolded();
+  b.innerHTML = folded ? I_UNFOLD : I_FOLD;
+  const label = folded ? "Unfold all files" : "Fold all files";
+  b.title = label;
+  b.setAttribute("aria-label", label);
+}
+updateFoldToggle(); // scripts load after the DOM; seed the icon before any stream exists
 
 function setListMode(on) {
   S.listMode = on;
@@ -916,6 +943,7 @@ function rebuildStream() {
   revalidatePin(); // heights moved: the pin may no longer describe anything
   updateStickyHeader(true); // a file arriving can move both the top file and the count
   promotePendingFocus();
+  updateFoldToggle(); // every fold and selection change funnels through here
 }
 
 /** Sidebar click / j/k target: make sure it's in the stream, then go there. */

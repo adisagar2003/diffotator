@@ -91,9 +91,10 @@ diffotator hook --uninstall     # remove it again
 
 The Changes tab is one stream: every selected file's diff, stacked back to back
 in a single scroll, GitHub's Files-changed view rather than a picker plus a pane.
-Each file list row has a checkbox; uncheck one and it drops out of the stream,
-check `all`/`none` above the list to bulk in or out, and `fold`/`unfold` beside
-them collapses or expands every file in the stream at once. `v` marks the
+Each file list row has an eye; click it shut and the file drops out of the
+stream, click `all`/`none` above the list to bulk in or out, and the fold
+toggle beside them collapses every file at once — then flips, editor style,
+to expand them again. `v` marks the
 current file viewed, collapses it in the stream, and jumps to the next unviewed
 one. The header tracks `12/56 viewed +2,341 −187`, viewed files dim with a ✓,
 and a sticky bar at the top of the pane doubles as that file's header — click
@@ -127,8 +128,8 @@ untracked ones included).
 
 The changed-files pane is a flat **List** by default (reviewing is working a list)
 and a **Tree** for the 12k-path repo browser; single-child directory chains fold to
-one row either way, and both carry the same per-file checkbox for changed files, so
-the stream in/out toggle works from either tab. Split or unified, word-level
+one row either way, and both carry the same per-file show/hide eye for changed
+files, so the stream in/out toggle works from either tab. Split or unified, word-level
 intra-line diff, collapsed context you can expand, `Full file` to review a change in
 its surroundings, and the File Tree tab so you can comment on code the diff never
 touched.

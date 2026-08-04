@@ -177,13 +177,20 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .tnode .stat .a{color:#4fae63}.tnode .stat .d{color:#d1596a}
 .tnode .cmt{font-size:10px;color:var(--accent)}
 .tdir{color:var(--text-dim)}
-/* In or out of the stream. Unchecked files still list; they just stop rendering. */
-.selbox{cursor:pointer;opacity:.8;flex:0 0 auto;font-size:11px;line-height:1;width:12px}
-.selbox:hover{opacity:1}
-.selbox.on{color:var(--accent)}
+/* In or out of the stream. Hidden files still list; they just stop rendering.
+   The eye spans the full 21px row height so the hit target is the icon's cell,
+   not the 14px glyph. */
+.selbox{cursor:pointer;opacity:.7;flex:0 0 18px;height:100%;display:flex;align-items:center;justify-content:center;color:var(--text-dim)}
+.selbox svg{width:14px;height:14px}
+.selbox:hover{opacity:1;color:var(--text)}
+.selbox.on{color:var(--accent);opacity:.9}
 .selall{display:flex;align-items:center;gap:2px;flex:0 0 auto;font-size:11px;color:var(--muted)}
 .selall button{border:0;background:transparent;color:var(--text-dim);cursor:pointer;font-size:11px;padding:0 3px}
 .selall button:hover{color:var(--accent);text-decoration:underline}
+/* Fold-all / unfold-all as one flipping icon, the way editors draw it. */
+.icotog{border:0;background:transparent;color:var(--text-dim);cursor:pointer;flex:0 0 auto;display:flex;align-items:center;padding:3px;border-radius:4px}
+.icotog svg{width:14px;height:14px}
+.icotog:hover{color:var(--accent);background:var(--elev2)}
 
 /* ---------- diff ---------- */
 .diff-header{
