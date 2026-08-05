@@ -44,13 +44,8 @@
         <button class="tab active" data-tab="changes">Changes</button>
         <button class="tab" data-tab="tree">File Tree</button>
         <div class="tabbar-spacer"></div>
+        <div id="streamSummary" class="stream-summary" hidden></div>
         <div id="diffTools" class="diff-tools">
-          <label class="tgl viewed" title="Mark reviewed and jump to the next unviewed file (v)">
-            <input type="checkbox" id="chkViewed"> Viewed
-          </label>
-          <label class="tgl" title="Show whole file, not just the diff (f)">
-            <input type="checkbox" id="chkFull"> Full file
-          </label>
           <div class="seg">
             <button id="segSplit" class="seg-btn active">Split</button>
             <button id="segUnified" class="seg-btn">Unified</button>

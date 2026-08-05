@@ -41,7 +41,6 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .pfill{position:absolute;left:0;top:0;bottom:0;background:var(--accent-dim);transition:width .18s}
 .ptext{position:relative;padding:0 9px;font-size:10.5px;color:var(--text-dim);white-space:nowrap}
 .ptext .a{color:#4fae63}.ptext .d{color:#d1596a}
-.tgl.viewed{padding:1px 7px;border:1px solid var(--border);border-radius:5px;background:var(--elev)}
 .tnode.seen .nm,.tnode.seen .stat{opacity:.45}
 .tnode.seen .caret{color:var(--ok);opacity:1;font-size:11px;font-weight:700}
 .chip.scope{color:#9fd0ff;border-color:#2d4c7e;background:#1b2a3f}
@@ -150,7 +149,15 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .tab.active{color:var(--text);background:var(--bg);box-shadow:inset 0 -2px 0 var(--accent)}
 .tabbar-spacer{flex:1}
 .diff-tools{display:flex;align-items:center;gap:10px;padding-right:10px}
-.tgl{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--text-dim);cursor:pointer}
+/* Review totals + the one bulk action, sitting left of the view toggle. */
+.stream-summary{display:flex;align-items:center;gap:8px;padding-right:12px;font-size:11.5px;color:var(--text-dim);font-family:var(--ui);white-space:nowrap}
+.stream-summary .a{color:#4fae63;font-family:var(--mono)}
+.stream-summary .d{color:#d1596a;font-family:var(--mono)}
+.ss-div{width:1px;height:14px;background:var(--border)}
+.ss-meter{width:90px;height:4px;border-radius:2px;background:var(--elev2);overflow:hidden}
+.ss-meter span{display:block;height:100%;background:var(--ok);transition:width .18s}
+.stream-summary .btn{height:22px;padding:0 8px;font-size:11px;border:1px solid var(--border)}
+.stream-summary .btn[disabled]{opacity:.45;cursor:default}
 .seg{display:flex;border:1px solid var(--border);border-radius:5px;overflow:hidden;height:21px}
 .seg-btn{border:0;background:var(--elev);padding:0 9px;font-size:11.5px;color:var(--text-dim);cursor:pointer}
 .seg-btn.active{background:var(--accent);color:#fff}
@@ -218,9 +225,6 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .diff-header .nav button{width:22px;height:20px;border-radius:4px;border:1px solid var(--border);background:var(--elev);cursor:pointer;font-size:10px;padding:0}
 .diff-header .caret{width:11px;flex:0 0 auto;color:var(--muted);font-size:9px;cursor:pointer}
 .diff-header .caret:hover{color:var(--text)}
-.diff-header .shbox{cursor:pointer;flex:0 0 auto;font-size:11px;opacity:.8}
-.diff-header .shbox:hover{opacity:1}
-.diff-header .shbox.on{color:var(--accent)}
 .diff-header .fp{cursor:pointer}
 .diff-header .fp:hover b{text-decoration:underline}
 
@@ -304,15 +308,39 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
   color:var(--text-dim);white-space:nowrap;overflow:hidden;cursor:pointer
 }
 .fsh:hover{background:var(--elev)}
-.fsh .caret{width:11px;flex:0 0 auto;color:var(--muted);font-size:9px}
+/* Which row you are on (blue) and what is done (green), readable from the
+   list's left edge without reading any pill. */
+.fsh .rail{position:absolute;left:0;top:-1px;bottom:-1px;width:3px}
+.fsh.cur .rail{background:var(--accent)}
+.fsh.seen .rail{background:var(--ok)}
+.fsh.cur{background:var(--elev)}
+.fsh .caret{width:11px;flex:0 0 auto;color:var(--muted);font-size:9px;cursor:pointer}
 .fsh .fp{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
-.fsh.seen .fp{opacity:.6}
+/* A viewed row recedes as a whole — darker ground, muted name, washed counts. */
+.fsh.seen{background:#1d1f22}
+.fsh.seen .fp{opacity:.55}
+.fsh.seen .plus,.fsh.seen .minus{opacity:.5}
 .fsh.closed{color:var(--muted)}
-.fsh .vchip{font-size:10px;padding:0 6px;border-radius:9px;background:#173a24;border:1px solid #2b6b3e;color:#7fbf90}
 .fsh .old{color:var(--muted);overflow:hidden;text-overflow:ellipsis}
 .fsh .pos{font-size:11px;color:var(--muted)}
 .fsh .plus{color:#4fae63;font-family:var(--mono);font-size:11.5px}
 .fsh .minus{color:#d1596a;font-family:var(--mono);font-size:11.5px}
+/* The per-file controls. Fixed-width group so the pill column lines up down
+   the stream; untouched pills sit at 40% and come to strength on hover or on
+   the active row. Viewed filled (a done-state), Full file outlined (a mode). */
+.pills{display:flex;gap:6px;flex:0 0 148px;justify-content:flex-end;align-items:center}
+.pill{
+  font:11px/20px var(--ui);padding:0 9px;border-radius:10px;cursor:pointer;
+  background:transparent;border:1px solid var(--border);color:var(--text-dim);
+  opacity:.4;transition:opacity .12s ease;white-space:nowrap
+}
+.fsh:hover .pill,.fsh.cur .pill,.diff-header .pill{opacity:1}
+.pill:hover{border-color:var(--text-dim);color:var(--text)}
+.pill.pviewed .ck{display:inline-block;width:12px;text-align:left}
+.pill.pviewed.on{background:var(--ok);border-color:var(--ok);color:#0d1512;font-weight:600;opacity:1}
+.pill.pviewed.on:hover{border-color:var(--ok);color:#0d1512}
+.pill.pfull.on{background:#1b2a3f;border-color:var(--accent);color:#9fd0ff;opacity:1}
+.pill.pfull.on:hover{border-color:var(--accent);color:#9fd0ff}
 /* Not a diff and not a fold — a sentence about why a file has nothing to show. */
 .fold.note{font-style:italic;cursor:default}
 .fold.note:hover{background:#1f2226;color:var(--muted)}

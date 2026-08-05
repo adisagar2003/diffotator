@@ -870,11 +870,40 @@ function renderProgress() {
     `<span class="pfill" style="width:${Math.round((seen / total) * 100)}%"></span>` +
     `<span class="ptext">${seen}/${total} viewed` +
     ` <span class="a">+${add}</span> <span class="d">−${del}</span></span>`;
-}
 
-function syncViewedToggle() {
-  const box = $("#chkViewed");
-  if (box) box.checked = !!(S.selFile && isViewed(S.selFile));
+  // The diff toolbar's own copy: fuller words than the topbar pill, plus the
+  // one bulk action. Rewritten wholesale, so the button is delegated, not bound.
+  const ss = $("#streamSummary");
+  ss.hidden = !total || S.tab === "tree";
+  ss.innerHTML = !total
+    ? ""
+    : `<span>${total} file${total === 1 ? "" : "s"} changed</span>` +
+      `<span class="a">+${add}</span><span class="d">−${del}</span>` +
+      `<span class="ss-div"></span>` +
+      `<span>${seen} of ${total} viewed</span>` +
+      `<span class="ss-meter"><span style="width:${Math.round((seen / total) * 100)}%"></span></span>` +
+      `<button class="btn ghost" data-markall ${seen === total ? "disabled" : ""}>Mark all viewed</button>`;
+}
+$("#streamSummary").addEventListener("click", (e) => {
+  if (e.target.closest("[data-markall]")) markAllViewed();
+});
+
+/* The two per-file controls, shared by every stream header and the sticky
+   header so they stay one visual language. Buttons, not checkboxes: their
+   clicks must not bubble into the row's own set-active / collapse behavior,
+   and a pill can carry the on-state styling a native box cannot. */
+const pillsHtml = (viewed, full) => `<span class="pills">
+    <button class="pill pfull${full ? " on" : ""}" data-pfull title="Show the whole file, not just the diff (f)">Full file</button>
+    <button class="pill pviewed${viewed ? " on" : ""}" data-pviewed title="Mark reviewed — does not fold the file (v folds and advances)"><span class="ck">${viewed ? "✓" : ""}</span>Viewed</button>
+  </span>`;
+
+const isFull = (path) => !!(path && (S.perFile.get(path) || {}).full);
+
+/** Every selected file in one sweep, then one persist + repaint — per-file
+    setViewed would save the draft and rebuild once per file. */
+function markAllViewed() {
+  for (const f of S.files) if (isSelected(f.path)) S.viewed.add(viewKey(f.path));
+  changed();
 }
 
 /** Next file that has not been marked viewed, wrapping from the current one.
@@ -1105,7 +1134,6 @@ function scrollToFile(path) {
   diffVL.scrollToIndex(seg.start, false, 0);
   pinAfterScroll(path);
   updateTreeSel(path);
-  syncViewedToggle();
   updateStickyHeader(true);
 }
 
@@ -1318,18 +1346,23 @@ const ROW_HTML = {
       <button class="fbtn" data-dir="up" title="Show the ${chunk} lines before the change below">⤒ ${chunk}</button></div>`;
   },
 
-  /** The bar between two files: name, counts, position, collapse toggle. */
+  /** The bar between two files: name, counts, position, and both per-file
+      controls. The pill group sits in a fixed-width slot so the column stays
+      steady down the stream no matter which rows are ticked; the Viewed pill
+      reserves a checkmark slot so its label never shifts on toggle. */
   fileHeader(item, top) {
     const s = item.stats || {};
-    return `<div class="fsh${item.collapsed ? " closed" : ""}${item.viewed ? " seen" : ""}"
+    const active = item.f === S.selFile;
+    return `<div class="fsh${item.collapsed ? " closed" : ""}${item.viewed ? " seen" : ""}${active ? " cur" : ""}"
         style="top:${top}px" data-fhead="${esc(item.f)}" title="${esc(item.f)}">
-      <span class="caret">${item.collapsed ? "▸" : "▾"}</span>
+      <span class="rail"></span>
+      <span class="caret" data-caret title="${item.collapsed ? "Expand" : "Collapse"} this file">${item.collapsed ? "▸" : "▾"}</span>
       <span class="fp">${esc(item.f)}</span>
-      ${item.viewed ? `<span class="vchip">✓ viewed</span>` : ""}
       ${s.oldPath ? `<span class="old">← ${esc(s.oldPath)}</span>` : ""}
       <span class="grow"></span>
       <span class="pos">${item.idx + 1} of ${item.count}</span>
       <span class="plus">+${s.additions ?? 0}</span><span class="minus">−${s.deletions ?? 0}</span>
+      ${pillsHtml(item.viewed, item.full)}
     </div>`;
   },
 
@@ -1563,12 +1596,9 @@ function updateStickyHeader(force) {
   }
   if (!force && head.dataset.file === seg.file) return; // cheap on every scroll tick
   head.dataset.file = seg.file;
-  // "Full file" is per file now, so the box describes whichever one is on top.
-  $("#chkFull").checked = !!(S.perFile.get(seg.file) || {}).full;
   if (S.selFile !== seg.file) {
     S.selFile = seg.file;
     updateTreeSel(seg.file); // incremental: scroll crossings must not rebuild the pane
-    syncViewedToggle();
   }
   const f = S.files.find((x) => x.path === seg.file) || {};
   const i = S.segments.indexOf(seg);
@@ -1576,11 +1606,11 @@ function updateStickyHeader(force) {
   const viewed = isViewed(seg.file);
   head.innerHTML = `
     <span class="caret" data-shfold title="${collapsed ? "Expand" : "Collapse"} this file">${collapsed ? "▸" : "▾"}</span>
-    <span class="shbox${viewed ? " on" : ""}" data-shviewed title="Mark viewed — does not fold the file">${viewed ? "☑" : "☐"}</span>
     <span class="fp" data-shjump title="${esc(seg.file)} — click to jump to the top of this file"><b>${esc(seg.file)}</b></span>
     <span class="plus">+${f.additions ?? 0}</span><span class="minus">−${f.deletions ?? 0}</span>
     <span class="grow"></span>
     <span class="pos">${i + 1} of ${S.segments.length}</span>
+    ${pillsHtml(viewed, isFull(seg.file))}
     <div class="nav"><button data-nav="prev" title="Previous change (p)">▲</button><button data-nav="next" title="Next change (n)">▼</button></div>`;
 }
 /* Bound, not passed by reference: the listener would hand the scroll event in
@@ -1598,12 +1628,16 @@ $("#diffBody").addEventListener(
 );
 
 $("#diffBody").addEventListener("click", (e) => {
-  // Clicking a file's header folds that file away — the stream's own accordion.
+  /* A file's header row: the pills own their file's state, the caret is the
+     collapse toggle, and the row body sets the active file. (Collapse used to
+     live on the whole row — every misclick folded the file being read.) */
   const fh = e.target.closest(".fsh[data-fhead]");
   if (fh) {
     const p = fh.dataset.fhead;
-    setCollapsed(p, !isCollapsed(p));
-    return;
+    if (e.target.closest("[data-pviewed]")) return setViewed(p, !isViewed(p)); // viewed only — v's auto-fold stays on v
+    if (e.target.closest("[data-pfull]")) return setFull(p, !isFull(p));
+    if (e.target.closest("[data-caret]")) return setCollapsed(p, !isCollapsed(p));
+    return scrollToFile(p);
   }
   const fold = e.target.closest(".fold[data-fold]");
   if (fold) {
@@ -1662,7 +1696,8 @@ $("#diffHeader").addEventListener("click", (e) => {
   const file = $("#diffHeader").dataset.file;
   if (!file) return;
   if (e.target.closest("[data-shfold]")) return setCollapsed(file, !isCollapsed(file));
-  if (e.target.closest("[data-shviewed]")) return setViewed(file, !isViewed(file)); // viewed only — v's auto-fold stays on v
+  if (e.target.closest("[data-pviewed]")) return setViewed(file, !isViewed(file)); // viewed only — v's auto-fold stays on v
+  if (e.target.closest("[data-pfull]")) return setFull(file, !isFull(file));
   if (e.target.closest("[data-shjump]")) return scrollToFile(file);
 });
 
@@ -1828,7 +1863,7 @@ function setTab(tab) {
   // 12k paths are only navigable as a tree; a 50-file review is a list.
   setListMode(tab !== "tree");
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
-  $("#chkViewed").parentElement.hidden = tab === "tree";
+  $("#streamSummary").hidden = tab === "tree"; // renderProgress re-shows it with fresh numbers
   if (tab === "tree" && !S.treePaths) {
     loadTree();
     return; // loadTree renders the file list itself once paths arrive
@@ -1881,7 +1916,6 @@ function setView(v) {
   $("#segUnified").classList.toggle("active", v === "unified");
   renderDiff();
 }
-$("#chkViewed").onchange = (e) => toggleViewed(e.target.checked);
 function toggleViewed(on) {
   if (!S.selFile) return;
   setViewed(S.selFile, on);
@@ -1897,23 +1931,18 @@ function toggleViewed(on) {
   }
 }
 
-/* "Full file" belongs to a file, not to the pane: the stream shows many files
-   at once, so the box acts on whichever one the sticky header names and is
-   re-read from that file's state on every header update. */
-$("#chkFull").onchange = (e) => setFullOnCurrent(e.target.checked);
-function setFullOnCurrent(on) {
-  if (S.tab === "tree") {
-    $("#chkFull").checked = true; // the tree tab only ever shows whole files
-    return;
-  }
-  const st = S.selFile && S.perFile.get(S.selFile);
-  if (!st || !st.loaded) {
-    // Nothing has arrived to unfold yet — put the box back rather than lie.
-    $("#chkFull").checked = false;
-    return;
-  }
+/* "Full file" belongs to a file — the pill on its row and the sticky header's
+   copy both come here. Nothing to unfold before the diff arrives, so a click
+   on a still-loading file is a no-op rather than a lie. */
+function setFull(path, on) {
+  const st = path && S.perFile.get(path);
+  if (!st || !st.loaded) return;
   st.full = on;
   rebuildStream();
+}
+function setFullOnCurrent(on) {
+  if (S.tab === "tree") return; // the tree tab only ever shows whole files
+  setFull(S.selFile, on);
 }
 
 // ---------------------------------------------------------------------------
@@ -2127,7 +2156,6 @@ function render() {
   renderProgress();
   renderComments();
   renderCounts();
-  syncViewedToggle();
   renderDiff();
   updateFoldToggle(); // selection changes come through here, not rebuildStream
 }
@@ -2430,7 +2458,7 @@ document.addEventListener("keydown", (e) => {
       setView(S.view === "split" ? "unified" : "split");
       break;
     case "f":
-      setFullOnCurrent(!$("#chkFull").checked);
+      setFullOnCurrent(!isFull(S.selFile));
       break;
     case "v":
       toggleViewed(!isViewed(S.selFile));
