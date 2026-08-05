@@ -231,8 +231,10 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .diff-header .stepper button{width:24px;height:20px;border:0;border-radius:0;background:transparent;color:var(--text-dim);cursor:pointer;font-size:9px;padding:0}
 .diff-header .stepper button:hover{background:var(--elev2);color:var(--text)}
 .diff-header .stepper .chg{padding:0 8px;border-left:1px solid var(--border-soft);border-right:1px solid var(--border-soft);font-size:11px;color:var(--text-dim);white-space:nowrap;font-variant-numeric:tabular-nums}
-.diff-header .caret{width:11px;flex:0 0 auto;color:var(--muted);font-size:9px;cursor:pointer}
+.diff-header .caret{width:16px;flex:0 0 auto;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
 .diff-header .caret:hover{color:var(--text)}
+.diff-header .caret svg{width:13px;height:13px;transition:transform .12s}
+.diff-header .caret.open svg{transform:rotate(90deg)}
 .diff-header .fp{cursor:pointer}
 .diff-header .fp:hover b{text-decoration:underline}
 
@@ -322,7 +324,10 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .fsh.cur .rail{background:var(--accent)}
 .fsh.seen .rail{background:var(--ok)}
 .fsh.cur{background:var(--elev)}
-.fsh .caret{width:11px;flex:0 0 auto;color:var(--muted);font-size:9px;cursor:pointer}
+.fsh .caret{width:16px;flex:0 0 auto;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.fsh .caret:hover{color:var(--text)}
+.fsh .caret svg{width:13px;height:13px;transition:transform .12s}
+.fsh .caret.open svg{transform:rotate(90deg)}
 .fsh .fp{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
 /* A viewed row recedes as a whole — darker ground, muted name, washed counts. */
 .fsh.seen{background:#1d1f22}

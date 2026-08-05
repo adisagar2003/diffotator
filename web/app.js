@@ -943,6 +943,9 @@ const I_EYE = svgIcon(EYE_PATHS);
 const I_EYE_OFF = svgIcon(EYE_PATHS + `<path d="m3 13.5 10-11"/>`);
 const I_FOLD = svgIcon(`<path d="M4 2.5 8 6l4-3.5M4 13.5 8 10l4 3.5"/>`);
 const I_UNFOLD = svgIcon(`<path d="M4 6l4-3.5L12 6M4 10l4 3.5L12 10"/>`);
+// One chevron, rotated by CSS: `.caret.open svg` turns it downward, so the
+// open/closed flip animates instead of swapping glyphs.
+const I_CHEV = svgIcon(`<path d="M6 3.5 10.5 8 6 12.5"/>`);
 
 function fileRow(path, m, depth, label) {
   const sel = S.selFile === path ? " sel" : "";
@@ -1375,7 +1378,7 @@ const ROW_HTML = {
     return `<div class="fsh${item.collapsed ? " closed" : ""}${item.viewed ? " seen" : ""}${active ? " cur" : ""}"
         style="top:${top}px" data-fhead="${esc(item.f)}" title="${esc(item.f)}">
       <span class="rail"></span>
-      <span class="caret" data-caret title="${item.collapsed ? "Expand" : "Collapse"} this file">${item.collapsed ? "▸" : "▾"}</span>
+      <span class="caret${item.collapsed ? "" : " open"}" data-caret title="${item.collapsed ? "Expand" : "Collapse"} this file">${I_CHEV}</span>
       <span class="fp">${esc(item.f)}</span>
       ${s.oldPath ? `<span class="old">← ${esc(s.oldPath)}</span>` : ""}
       <span class="grow"></span>
@@ -1639,7 +1642,7 @@ function updateStickyHeader(force) {
   const collapsed = isCollapsed(seg.file);
   const viewed = isViewed(seg.file);
   head.innerHTML = `
-    <span class="caret" data-shfold title="${collapsed ? "Expand" : "Collapse"} this file">${collapsed ? "▸" : "▾"}</span>
+    <span class="caret${collapsed ? "" : " open"}" data-shfold title="${collapsed ? "Expand" : "Collapse"} this file">${I_CHEV}</span>
     <span class="fp" data-shjump title="${esc(seg.file)} — click to jump to the top of this file"><b>${esc(seg.file)}</b></span>
     <span class="plus">+${f.additions ?? 0}</span><span class="minus">−${f.deletions ?? 0}</span>
     <span class="grow"></span>
