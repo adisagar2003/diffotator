@@ -790,7 +790,12 @@ const isViewed = (path) => S.viewed.has(viewKey(path));
 function setViewed(path, on) {
   const k = viewKey(path);
   on ? S.viewed.add(k) : S.viewed.delete(k);
+  /* Viewed folds the file away, from every entry point (pill, sticky bar, v).
+     One-way on purpose: un-viewing leaves the fold alone, and unfolding a
+     file never clears its viewed mark — done is done until you say otherwise. */
+  if (on) S.collapsed.add(k);
   changed();
+  if (on) refocusOutOf(path);
 }
 
 /* Selection and collapse are per scope for the same reason viewed is, and they
@@ -906,7 +911,7 @@ $("#streamSummary").addEventListener("click", (e) => {
    and a pill can carry the on-state styling a native box cannot. */
 const pillsHtml = (viewed, full) => `<span class="pills">
     <button class="pill pfull${full ? " on" : ""}" data-pfull title="Show the whole file, not just the diff (f)">Full file</button>
-    <button class="pill pviewed${viewed ? " on" : ""}" data-pviewed title="Mark reviewed — does not fold the file (v folds and advances)"><span class="ck">${viewed ? "✓" : ""}</span>Viewed</button>
+    <button class="pill pviewed${viewed ? " on" : ""}" data-pviewed title="Mark reviewed and fold the file (v also jumps to the next unviewed)"><span class="ck">${viewed ? "✓" : ""}</span>Viewed</button>
   </span>`;
 
 const isFull = (path) => !!(path && (S.perFile.get(path) || {}).full);
@@ -1713,7 +1718,7 @@ $("#diffBody").addEventListener("click", (e) => {
   const fh = e.target.closest(".fsh[data-fhead]");
   if (fh) {
     const p = fh.dataset.fhead;
-    if (e.target.closest("[data-pviewed]")) return setViewed(p, !isViewed(p)); // viewed only — v's auto-fold stays on v
+    if (e.target.closest("[data-pviewed]")) return setViewed(p, !isViewed(p)); // folds too; v additionally advances
     if (e.target.closest("[data-pfull]")) return setFull(p, !isFull(p));
     if (e.target.closest("[data-caret]")) return setCollapsed(p, !isCollapsed(p));
     return scrollToFile(p);
@@ -1787,7 +1792,7 @@ $("#diffHeader").addEventListener("click", (e) => {
   const file = $("#diffHeader").dataset.file;
   if (!file || S.tab === "tree") return;
   if (e.target.closest("[data-shfold]")) return setCollapsed(file, !isCollapsed(file));
-  if (e.target.closest("[data-pviewed]")) return setViewed(file, !isViewed(file)); // viewed only — v's auto-fold stays on v
+  if (e.target.closest("[data-pviewed]")) return setViewed(file, !isViewed(file)); // folds too; v additionally advances
   if (e.target.closest("[data-pfull]")) return setFull(file, !isFull(file));
   if (e.target.closest("[data-shjump]")) return scrollToFile(file);
 });
@@ -2028,9 +2033,8 @@ function setView(v) {
 }
 function toggleViewed(on) {
   if (!S.selFile) return;
-  setViewed(S.selFile, on);
+  setViewed(S.selFile, on); // folds too — setViewed owns the viewed→collapse pairing
   if (!on) return;
-  setCollapsed(S.selFile, true); // GitHub's move: what you have read folds away
   const nx = nextUnviewed();
   if (nx) {
     scrollToFile(nx);
