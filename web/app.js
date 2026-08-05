@@ -180,6 +180,12 @@ function vlist(container, rowH, count, renderRow, heightOf) {
       if (heightOf && (!offsets || offsets.length !== state.count() + 1)) reindex();
       return Math.max(0, Math.min(state.count() - 1, indexAt(container.scrollTop)));
     },
+    /** Which item sits at the viewport's middle — where a centered jump put the
+        reader's eye. The change counter anchors here, not at the top edge. */
+    midIndex: () => {
+      if (heightOf && (!offsets || offsets.length !== state.count() + 1)) reindex();
+      return Math.max(0, Math.min(state.count() - 1, indexAt(container.scrollTop + container.clientHeight / 2)));
+    },
     /* `pad` is how much of what came before stays visible. The default keeps a
        few lines of context above the target; jumping to a file passes 0 so its
        header lands at the very top and the sticky bar names the file you
@@ -1611,7 +1617,29 @@ function updateStickyHeader(force) {
     <span class="grow"></span>
     <span class="pos">${i + 1} of ${S.segments.length}</span>
     ${pillsHtml(viewed, isFull(seg.file))}
+    <span class="chg" id="chgPos"></span>
     <div class="nav"><button data-nav="prev" title="Previous change (p)">▲</button><button data-nav="next" title="Next change (n)">▼</button></div>`;
+  updateChangeCounter();
+}
+
+/* The arrows moved text without saying what they act on. The counter names it:
+   which change block of the current file the viewport sits in. Separate from
+   updateStickyHeader because that early-returns while the top file is
+   unchanged, and this must track every scroll tick within the file. */
+function updateChangeCounter() {
+  const el = $("#chgPos");
+  if (!el) return;
+  const seg = currentSeg();
+  if (!seg) {
+    el.textContent = "";
+    return;
+  }
+  // Anchor priority: the exact block the last n/p landed on; else the
+  // viewport's middle (jumps center their target, so the top edge would still
+  // sit in the previous block); else a pinned file's start.
+  const at = lastJumpFresh() ? lastJump.idx : S.pinnedSeg === seg.file ? seg.start : diffVL.midIndex();
+  const { cur, total } = RM.changePos(S.items, seg.start, seg.end, at);
+  el.textContent = !total ? "" : cur ? `change ${cur} of ${total}` : `${total} change${total === 1 ? "" : "s"}`;
 }
 /* Bound, not passed by reference: the listener would hand the scroll event in
    as `force` and rewrite the header on every tick. */
@@ -1623,6 +1651,7 @@ $("#diffBody").addEventListener(
        event lands on the same scrollTop and is ignored. */
     if (S.pinnedSeg && $("#diffBody").scrollTop !== S.pinExpectedTop) S.pinnedSeg = null;
     updateStickyHeader();
+    updateChangeCounter(); // the sticky header early-returns within a file; the counter may not
   },
   { passive: true }
 );
@@ -1701,18 +1730,34 @@ $("#diffHeader").addEventListener("click", (e) => {
   if (e.target.closest("[data-shjump]")) return scrollToFile(file);
 });
 
+/* The last n/p landing, valid only while nothing scrolled or rebuilt under it.
+   Without it, repeated n re-finds the same block: a centered jump leaves the
+   viewport's top edge in the context ABOVE the block just visited, and a
+   top-anchored walk starts from there — the arrows moved text once and then
+   went dead, with no way to tell why. Items identity is the rebuild guard:
+   buildItems replaces the array wholesale. */
+let lastJump = null;
+const lastJumpFresh = () => !!(lastJump && lastJump.items === S.items && $("#diffBody").scrollTop === lastJump.top);
+
 function jumpChange(dir) {
   S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
   // Rows are no longer uniform (headers, cards, notes), so scrollTop/ROW is not
   // an item index any more — the list knows which item the viewport starts on.
-  /* Start from where the reader thinks they are: a pinned file's own header,
-     not the segment the clamped scroll left at the top of the viewport. */
+  /* Start from where the reader thinks they are: the block the previous jump
+     landed on, or a pinned file's own header — not the segment the clamped
+     scroll left at the top of the viewport. */
   const pinned = S.pinnedSeg ? currentSeg() : null;
-  const from = pinned && pinned.file === S.pinnedSeg ? pinned.start : diffVL.topIndex();
+  const from = lastJumpFresh()
+    ? lastJump.idx
+    : pinned && pinned.file === S.pinnedSeg
+    ? pinned.start
+    : diffVL.topIndex();
   const i = RM.findChange(S.items, from, dir);
   if (i < 0) return;
   diffVL.scrollToIndex(i, true);
+  lastJump = { idx: i, top: $("#diffBody").scrollTop, items: S.items };
   pinAfterScroll(S.items[i] && S.items[i].f);
+  updateChangeCounter(); // a clamped jump moves no pixels, so no scroll event fires
 }
 
 /* Windowing means only ~60 rows exist in the DOM, so the browser's own Find
