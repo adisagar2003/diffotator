@@ -878,17 +878,23 @@ function renderProgress() {
     ` <span class="a">+${add}</span> <span class="d">−${del}</span></span>`;
 
   // The diff toolbar's own copy: fuller words than the topbar pill, plus the
-  // one bulk action. Rewritten wholesale, so the button is delegated, not bound.
+  // one bulk action. Selection-scoped, unlike the topbar — Mark all viewed and
+  // the v-loop only walk selected files, so the meter and the button's disabled
+  // state must count the same set or the button goes dead while looking live.
+  const shown = S.files.filter((f) => isSelected(f.path));
+  const sTotal = shown.length;
+  const sSeen = shown.filter((f) => isViewed(f.path)).length;
   const ss = $("#streamSummary");
-  ss.hidden = !total || S.tab === "tree";
-  ss.innerHTML = !total
+  ss.hidden = !sTotal || S.tab === "tree";
+  ss.innerHTML = !sTotal
     ? ""
-    : `<span>${total} file${total === 1 ? "" : "s"} changed</span>` +
-      `<span class="a">+${add}</span><span class="d">−${del}</span>` +
+    : `<span>${sTotal} file${sTotal === 1 ? "" : "s"} changed</span>` +
+      `<span class="a">+${shown.reduce((a, f) => a + (f.additions || 0), 0)}</span>` +
+      `<span class="d">−${shown.reduce((a, f) => a + (f.deletions || 0), 0)}</span>` +
       `<span class="ss-div"></span>` +
-      `<span>${seen} of ${total} viewed</span>` +
-      `<span class="ss-meter"><span style="width:${Math.round((seen / total) * 100)}%"></span></span>` +
-      `<button class="btn ghost" data-markall ${seen === total ? "disabled" : ""}>Mark all viewed</button>`;
+      `<span>${sSeen} of ${sTotal} viewed</span>` +
+      `<span class="ss-meter"><span style="width:${Math.round((sSeen / sTotal) * 100)}%"></span></span>` +
+      `<button class="btn ghost" data-markall ${sSeen === sTotal ? "disabled" : ""}>Mark all viewed</button>`;
 }
 $("#streamSummary").addEventListener("click", (e) => {
   if (e.target.closest("[data-markall]")) markAllViewed();
@@ -906,9 +912,16 @@ const pillsHtml = (viewed, full) => `<span class="pills">
 const isFull = (path) => !!(path && (S.perFile.get(path) || {}).full);
 
 /** Every selected file in one sweep, then one persist + repaint — per-file
-    setViewed would save the draft and rebuild once per file. */
+    setViewed would save the draft and rebuild once per file. Folds too, the
+    way v does: the finish card requires viewed AND collapsed, and the one
+    bulk action that says "done with everything" must be able to reach it. */
 function markAllViewed() {
-  for (const f of S.files) if (isSelected(f.path)) S.viewed.add(viewKey(f.path));
+  for (const f of S.files) {
+    if (!isSelected(f.path)) continue;
+    S.viewed.add(viewKey(f.path));
+    S.collapsed.add(viewKey(f.path));
+  }
+  if (S.focus) refocusOutOf(S.focus.file);
   changed();
 }
 
@@ -1605,6 +1618,10 @@ function updateStickyHeader(force) {
   if (S.selFile !== seg.file) {
     S.selFile = seg.file;
     updateTreeSel(seg.file); // incremental: scroll crossings must not rebuild the pane
+    /* The vlist's own scroll listener painted the header rows before this one
+       ran, against the previous selFile — repaint or the blue rail trails the
+       crossing by one window shift. */
+    diffVL.paint(true);
   }
   const f = S.files.find((x) => x.path === seg.file) || {};
   const i = S.segments.indexOf(seg);
@@ -1625,7 +1642,10 @@ function updateStickyHeader(force) {
 /* The arrows moved text without saying what they act on. The counter names it:
    which change block of the current file the viewport sits in. Separate from
    updateStickyHeader because that early-returns while the top file is
-   unchanged, and this must track every scroll tick within the file. */
+   unchanged, and this must track every scroll tick within the file. The block
+   starts are cached per (items, file): this runs at scroll frequency, and an
+   O(segment) walk per tick is exactly what the rest of the hot path avoids. */
+let chgCache = null;
 function updateChangeCounter() {
   const el = $("#chgPos");
   if (!el) return;
@@ -1634,11 +1654,23 @@ function updateChangeCounter() {
     el.textContent = "";
     return;
   }
-  // Anchor priority: the exact block the last n/p landed on; else the
-  // viewport's middle (jumps center their target, so the top edge would still
-  // sit in the previous block); else a pinned file's start.
-  const at = lastJumpFresh() ? lastJump.idx : S.pinnedSeg === seg.file ? seg.start : diffVL.midIndex();
-  const { cur, total } = RM.changePos(S.items, seg.start, seg.end, at);
+  if (!chgCache || chgCache.items !== S.items || chgCache.file !== seg.file) {
+    chgCache = { items: S.items, file: seg.file, starts: RM.changeStarts(S.items, seg.start, seg.end) };
+  }
+  const total = chgCache.starts.length;
+  /* Anchor priority: the exact block the last n/p landed on, else the
+     viewport's middle (jumps center their target, so the top edge would still
+     sit in the previous block). Either can fall outside the header's own
+     segment — a short file fits several segments on one screen — and the
+     counter must describe the file the header names, so clamp to its range. */
+  let at = lastJumpIdx();
+  if (at < seg.start || at >= seg.end) at = diffVL.midIndex();
+  if (at < seg.start || at >= seg.end) at = Math.max(seg.start, Math.min(seg.end - 1, diffVL.topIndex()));
+  let cur = 0;
+  for (const s of chgCache.starts) {
+    if (s > at) break;
+    cur++;
+  }
   el.textContent = !total ? "" : cur ? `change ${cur} of ${total}` : `${total} change${total === 1 ? "" : "s"}`;
 }
 /* Bound, not passed by reference: the listener would hand the scroll event in
@@ -1678,10 +1710,15 @@ $("#diffBody").addEventListener("click", (e) => {
     const chunk = RM.GEOM.chunk;
     const cur = st.expanded.get(id) || { head: 0, tail: 0 };
     const dir = e.target.closest("[data-dir]");
+    let grewAbove = 0;
     if (dir) {
       const n = Math.min(chunk, remaining);
-      if (dir.dataset.dir === "down") st.expanded.set(id, { head: cur.head + n, tail: cur.tail });
-      else st.expanded.set(id, { head: cur.head, tail: cur.tail + n });
+      if (dir.dataset.dir === "down") {
+        st.expanded.set(id, { head: cur.head + n, tail: cur.tail });
+        grewAbove = n;
+      } else {
+        st.expanded.set(id, { head: cur.head, tail: cur.tail + n });
+      }
     } else if (remaining <= chunk) {
       st.expanded.set(id, { head: cur.head + remaining, tail: cur.tail });
     } else {
@@ -1690,6 +1727,9 @@ $("#diffBody").addEventListener("click", (e) => {
     // Opening a fold grows the stream, which can invalidate a header pin — the
     // one rebuild path knows that; buildItems + refresh on their own did not.
     rebuildStream();
+    // A head reveal inserts its rows ABOVE the marker; without compensation the
+    // marker slides down a chunk's height and the second click misses it.
+    if (grewAbove) $("#diffBody").scrollTop += grewAbove * RM.GEOM.row;
     return;
   }
   const del = e.target.closest("[data-del]");
@@ -1722,22 +1762,31 @@ $("#diffHeader").addEventListener("click", (e) => {
   if (b) return jumpChange(b.dataset.nav === "next" ? 1 : -1);
   // The three mini-header controls act on the file the bar names. The tree
   // tab's header sets dataset.file = "" and has none of these controls.
+  /* Switching to the File Tree tab leaves the stream's header markup (and its
+     dataset.file) in place until the tree renders its own — a pill or fold
+     click in that window would rebuild the stream under the tree tab and
+     blank it. The nav branch above stays live; the file-scoped ones do not. */
   const file = $("#diffHeader").dataset.file;
-  if (!file) return;
+  if (!file || S.tab === "tree") return;
   if (e.target.closest("[data-shfold]")) return setCollapsed(file, !isCollapsed(file));
   if (e.target.closest("[data-pviewed]")) return setViewed(file, !isViewed(file)); // viewed only — v's auto-fold stays on v
   if (e.target.closest("[data-pfull]")) return setFull(file, !isFull(file));
   if (e.target.closest("[data-shjump]")) return scrollToFile(file);
 });
 
-/* The last n/p landing, valid only while nothing scrolled or rebuilt under it.
+/* The last n/p landing, valid only while the reader has not scrolled off it.
    Without it, repeated n re-finds the same block: a centered jump leaves the
    viewport's top edge in the context ABOVE the block just visited, and a
    top-anchored walk starts from there — the arrows moved text once and then
-   went dead, with no way to tell why. Items identity is the rebuild guard:
-   buildItems replaces the array wholesale. */
+   went dead, with no way to tell why. Anchored by file+line, not item index:
+   background diff arrivals rebuild the stream mid-review, and an index into a
+   discarded array would go stale on every straggler. The scrollTop check is
+   the "reader moved on" test; a rebuild that keeps scrollTop re-resolves. */
 let lastJump = null;
-const lastJumpFresh = () => !!(lastJump && lastJump.items === S.items && $("#diffBody").scrollTop === lastJump.top);
+function lastJumpIdx() {
+  if (!lastJump || $("#diffBody").scrollTop !== lastJump.top) return -1;
+  return RM.rowIndexFor(S.items, lastJump.side, lastJump.line, lastJump.file);
+}
 
 function jumpChange(dir) {
   S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
@@ -1746,16 +1795,14 @@ function jumpChange(dir) {
   /* Start from where the reader thinks they are: the block the previous jump
      landed on, or a pinned file's own header — not the segment the clamped
      scroll left at the top of the viewport. */
+  const ji = lastJumpIdx();
   const pinned = S.pinnedSeg ? currentSeg() : null;
-  const from = lastJumpFresh()
-    ? lastJump.idx
-    : pinned && pinned.file === S.pinnedSeg
-    ? pinned.start
-    : diffVL.topIndex();
+  const from = ji >= 0 ? ji : pinned && pinned.file === S.pinnedSeg ? pinned.start : diffVL.topIndex();
   const i = RM.findChange(S.items, from, dir);
   if (i < 0) return;
   diffVL.scrollToIndex(i, true);
-  lastJump = { idx: i, top: $("#diffBody").scrollTop, items: S.items };
+  const ln = RM.rowLine(S.items[i]);
+  lastJump = ln ? { top: $("#diffBody").scrollTop, file: S.items[i].f, side: ln.side, line: ln.line } : null;
   pinAfterScroll(S.items[i] && S.items[i].f);
   updateChangeCounter(); // a clamped jump moves no pixels, so no scroll event fires
 }

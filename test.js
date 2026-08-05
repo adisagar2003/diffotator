@@ -181,18 +181,13 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
     );
   }
 
-  // changePos: one change block in this fixture; the counter walks blocks the
-  // way findChange does.
+  // changeStarts: one change block in this fixture, starting where the first
+  // non-context row sits; consecutive change rows collapse into one start.
   {
     const first = items.findIndex((x) => x.k === "row" && x.u.t !== "ctx");
     assert.ok(first > 0, "fixture has a change block");
-    assert.deepStrictEqual(RM.changePos(items, 0, items.length, 0), { cur: 0, total: 1 }, "above the block: cur 0");
-    assert.deepStrictEqual(RM.changePos(items, 0, items.length, first), { cur: 1, total: 1 }, "on the block: cur 1");
-    assert.deepStrictEqual(
-      RM.changePos(items, 0, items.length, items.length - 1),
-      { cur: 1, total: 1 },
-      "past the block: still 1"
-    );
+    assert.deepStrictEqual(RM.changeStarts(items, 0, items.length), [first], "one block, starting at the change row");
+    assert.deepStrictEqual(RM.changeStarts(items, 0, first), [], "range ending before the block finds none");
   }
 
   // "Full file" stops folding altogether without losing the add/del marks.

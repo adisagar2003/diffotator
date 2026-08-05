@@ -367,24 +367,20 @@
   }
 
   /**
-   * Where the reader stands among a file's change blocks: `cur` is the last
-   * block starting at or before item index `at` (0 when still above the first),
-   * `total` the block count in [start, end). Feeds the "change 3 of 12" counter
-   * next to the prev/next arrows, walking blocks exactly as `findChange` does.
+   * Item indices where each change block in [start, end) begins, walking
+   * blocks exactly as `findChange` does. Feeds the "change 3 of 12" counter
+   * next to the prev/next arrows: the app caches this per (items, file) and
+   * counts how many starts fall at or before its anchor.
    */
-  function changePos(items, start, end, at) {
-    let total = 0;
-    let cur = 0;
+  function changeStarts(items, start, end) {
+    const starts = [];
     let inBlock = false;
     for (let i = start; i < end; i++) {
       const c = isChangeRow(items[i]);
-      if (c && !inBlock) {
-        total++;
-        if (i <= at) cur = total;
-      }
+      if (c && !inBlock) starts.push(i);
       inBlock = c;
     }
-    return { cur, total };
+    return starts;
   }
 
   /**
@@ -624,7 +620,7 @@
   exp.rowLine = rowLine;
   exp.rowIndexFor = rowIndexFor;
   exp.findChange = findChange;
-  exp.changePos = changePos;
+  exp.changeStarts = changeStarts;
   exp.focusStep = focusStep;
   exp.searchHits = searchHits;
   exp.nextUnviewed = nextUnviewed;
