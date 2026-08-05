@@ -207,9 +207,11 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .icotog:hover{color:var(--accent);background:var(--elev2)}
 
 /* ---------- diff ---------- */
+/* Visibly a status bar, not another stream row: blue-tinted ground and an
+   accent keel line under it, so it can never be misread as a file entry. */
 .diff-header{
   height:32px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 10px;
-  background:var(--panel);border-bottom:1px solid var(--border);font-size:12px;color:var(--text-dim);
+  background:#1f2733;border-bottom:1px solid var(--accent-dim);font-size:12px;color:var(--text-dim);
   white-space:nowrap;overflow:hidden
 }
 .diff-header .fp{overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
@@ -223,6 +225,12 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .diff-header .grow{flex:1}
 .diff-header .nav{display:flex;gap:2px}
 .diff-header .nav button{width:22px;height:20px;border-radius:4px;border:1px solid var(--border);background:var(--elev);cursor:pointer;font-size:10px;padding:0}
+/* One unit, counter between the arrows: the buttons visibly step the number,
+   which is the whole explanation of what they do. */
+.diff-header .stepper{display:flex;align-items:center;gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--bg)}
+.diff-header .stepper button{width:24px;height:20px;border:0;border-radius:0;background:transparent;color:var(--text-dim);cursor:pointer;font-size:9px;padding:0}
+.diff-header .stepper button:hover{background:var(--elev2);color:var(--text)}
+.diff-header .stepper .chg{padding:0 8px;border-left:1px solid var(--border-soft);border-right:1px solid var(--border-soft);font-size:11px;color:var(--text-dim);white-space:nowrap;font-variant-numeric:tabular-nums}
 .diff-header .caret{width:11px;flex:0 0 auto;color:var(--muted);font-size:9px;cursor:pointer}
 .diff-header .caret:hover{color:var(--text)}
 .diff-header .fp{cursor:pointer}
@@ -389,7 +397,6 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 /* The empty stream offers its own way out, so it has to read as clickable. */
 .empty-state b[data-selall]{color:var(--accent);cursor:pointer;text-decoration:underline}
 .diff-header .pos{font-size:11px;color:var(--muted);margin-right:8px}
-.diff-header .chg{font-size:11px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
 .btn:disabled{opacity:.45;cursor:not-allowed}
 
 /* syntax */

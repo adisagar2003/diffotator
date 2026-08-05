@@ -1645,8 +1645,9 @@ function updateStickyHeader(force) {
     <span class="grow"></span>
     <span class="pos">${i + 1} of ${S.segments.length}</span>
     ${pillsHtml(viewed, isFull(seg.file))}
-    <span class="chg" id="chgPos"></span>
-    <div class="nav"><button data-nav="prev" title="Previous change (p)">▲</button><button data-nav="next" title="Next change (n)">▼</button></div>`;
+    <div class="nav stepper" id="stepper" hidden>
+      <button data-nav="prev" title="Previous change (p)">▲</button><span class="chg" id="chgPos"></span><button data-nav="next" title="Next change (n)">▼</button>
+    </div>`;
   updateChangeCounter();
 }
 
@@ -1683,6 +1684,9 @@ function updateChangeCounter() {
     cur++;
   }
   el.textContent = !total ? "" : cur ? `change ${cur} of ${total}` : `${total} change${total === 1 ? "" : "s"}`;
+  // No blocks, no stepper: an empty pill with two arrows explains nothing.
+  const step = $("#stepper");
+  if (step) step.hidden = !total;
 }
 /* Bound, not passed by reference: the listener would hand the scroll event in
    as `force` and rewrite the header on every tick. */
