@@ -2065,50 +2065,9 @@ function setFullOnCurrent(on) {
 /* Drafts live on the server, not in localStorage: localStorage is keyed to the
    origin including the port, and every run binds a new random port, so drafts
    written by one session were invisible to the next. */
-/*
- * UI preferences: the same disk-over-localStorage reasoning, but global — a
- * pane width is a fact about your screen, not the repository. One store, one
- * seam: anything the UI wants remembered goes through these two calls; the
- * server holds a flat JSON object and never interprets the keys.
- */
-const Prefs = {
-  data: {},
-  pending: {}, // only what THIS session changed — the server merges key-level,
-  // so a concurrent session's settings are never clobbered by our snapshot
-  timer: null,
-  async load() {
-    let disk = {};
-    try {
-      disk = (await api("prefs")) || {};
-    } catch {
-      /* defaults are always an acceptable answer */
-    }
-    /* Merge under, never replace: the ☰ button and the splitters are live
-       while this request is in flight, and a click in that window has already
-       written into `data`. Replacing would invert memory against disk — the
-       click's value POSTs, but memory holds the disk value, so the reader's
-       next toggle no-ops on the equality guard and the wrong state sticks. */
-    this.data = { ...disk, ...this.data };
-  },
-  get(key, dflt) {
-    return key in this.data ? this.data[key] : dflt;
-  },
-  set(key, value) {
-    if (this.data[key] === value) return;
-    this.data[key] = value;
-    this.pending[key] = value;
-    clearTimeout(this.timer);
-    this.timer = setTimeout(() => {
-      const patch = this.pending;
-      this.pending = {};
-      fetch("/api/prefs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      }).catch(() => {}); // lost prefs must never take the review down
-    }, 250);
-  },
-};
+/* The preference store itself lives in web/prefs.js (window.Prefs) — one
+   source of truth for settings, per review. Below is only the DOM glue that
+   applies stored panel geometry to this page. */
 
 /* Panel geometry restores by splitter target id; the splitter's mouseup is the
    single writer, so a size that was never touched is never stored. */
