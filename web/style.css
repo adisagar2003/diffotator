@@ -285,6 +285,15 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
   border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft);font-family:var(--ui)
 }
 .fold:hover{background:var(--elev);color:var(--text)}
+/* A gap too big to dump at once: the row itself is inert, the two directional
+   buttons each reveal one chunk. */
+.fold.chunky{cursor:default;gap:10px}
+.fold.chunky:hover{background:#1f2226;color:var(--muted)}
+.fbtn{
+  font:11px/18px var(--ui);color:var(--text-dim);background:var(--elev2);
+  border:1px solid var(--border);border-radius:4px;padding:0 8px;cursor:pointer
+}
+.fbtn:hover{background:var(--elev);color:var(--text);border-color:var(--accent)}
 /* A file's bar inside the stream. Height is exactly RM.GEOM.fileHeader (32) —
    box-sizing:border-box means the two borders live inside it — or the windowed
    list's prefix-sum index would drift a pixel per file. */

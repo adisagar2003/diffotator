@@ -146,9 +146,54 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.strictEqual(items[items.length - 1].count, 11, "trailing run folded too");
 
   // A fold the reader opened must render its rows instead.
-  const opened = RM.buildItems({ ...base, expanded: new Set(["f0"]) });
+  const opened = RM.buildItems({ ...base, expanded: new Map([["f0", { head: 999, tail: 0 }]]) });
   assert.strictEqual(opened.items.filter((x) => x.k === "fold").length, 1, "opened fold is gone");
   assert.strictEqual(opened.items[0].k, "row", "…and its rows are back");
+
+  // Chunked reveal: the trailing fold is 11 lines (units 14..24). A head
+  // reveal shows the gap's first lines and the fold marker follows, count
+  // reduced; a tail reveal shows the gap's last lines after the marker.
+  {
+    const foldId = items[items.length - 1].id;
+    const part = RM.buildItems({ ...base, expanded: new Map([[foldId, { head: 4, tail: 2 }]]) });
+    const fi = part.items.findIndex((x) => x.k === "fold" && x.id === foldId);
+    assert.ok(fi > 0, "partially revealed fold still shows a marker");
+    assert.strictEqual(part.items[fi].count, 5, "count is the unrevealed remainder");
+    // 4 rows immediately before the marker are the head reveal, in order…
+    const before = part.items.slice(fi - 4, fi);
+    assert.ok(before.every((x) => x.k === "row"), "head reveal renders rows above the marker");
+    assert.deepStrictEqual(
+      before.map((x) => x.u.r.n),
+      [15, 16, 17, 18],
+      "head reveal continues downward from the change above"
+    );
+    // …and the tail rows close the file below it.
+    const after = part.items.slice(fi + 1);
+    assert.deepStrictEqual(after.map((x) => x.u.r.n), [24, 25], "tail reveal sits above the change below");
+
+    // Reveals meeting (or overshooting) the gap dissolve the fold entirely.
+    const done = RM.buildItems({ ...base, expanded: new Map([[foldId, { head: 6, tail: 8 }]]) });
+    assert.ok(!done.items.some((x) => x.k === "fold" && x.id === foldId), "met reveals dissolve the fold");
+    assert.strictEqual(
+      done.items.filter((x) => x.k === "row").length,
+      7 + 11,
+      "…and every gap line renders exactly once despite the overshoot"
+    );
+  }
+
+  // changePos: one change block in this fixture; the counter walks blocks the
+  // way findChange does.
+  {
+    const first = items.findIndex((x) => x.k === "row" && x.u.t !== "ctx");
+    assert.ok(first > 0, "fixture has a change block");
+    assert.deepStrictEqual(RM.changePos(items, 0, items.length, 0), { cur: 0, total: 1 }, "above the block: cur 0");
+    assert.deepStrictEqual(RM.changePos(items, 0, items.length, first), { cur: 1, total: 1 }, "on the block: cur 1");
+    assert.deepStrictEqual(
+      RM.changePos(items, 0, items.length, items.length - 1),
+      { cur: 1, total: 1 },
+      "past the block: still 1"
+    );
+  }
 
   // "Full file" stops folding altogether without losing the add/del marks.
   const full = RM.buildItems({ ...base, full: true });
@@ -285,8 +330,8 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
     { path: "c.js", additions: 0, deletions: 0, status: "modified" },
   ];
   const perFile = new Map([
-    ["a.js", { loaded: true, rows: mkRows(10, 5), expanded: new Set(), full: false }],
-    ["b.js", { loaded: true, rows: mkRows(10, 5), expanded: new Set(), full: false }],
+    ["a.js", { loaded: true, rows: mkRows(10, 5), expanded: new Map(), full: false }],
+    ["b.js", { loaded: true, rows: mkRows(10, 5), expanded: new Map(), full: false }],
     // c.js not loaded yet
   ]);
   const base = {
@@ -339,7 +384,7 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
     rows: perFile.get("a.js").rows,
     annotations: [],
     file: "a.js",
-    expanded: new Set(),
+    expanded: new Map(),
     full: false,
     view: "unified",
   });
@@ -405,8 +450,8 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
     { t: "add", n: 2, s: "two" },
   ];
   const pf = new Map([
-    ["a.js", { loaded: true, rows, expanded: new Set(), full: false }],
-    ["b.js", { loaded: true, rows, expanded: new Set(), full: false }],
+    ["a.js", { loaded: true, rows, expanded: new Map(), full: false }],
+    ["b.js", { loaded: true, rows, expanded: new Map(), full: false }],
   ]);
   const sel = new Set(["a.js", "b.js"]);
 
@@ -435,7 +480,7 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.ok(hit && hit.side === "new" && hit.line === 2, "firstChangeRowIn skips ctx, finds the add");
   assert.ok(reading.items[hit.index].f === "b.js", "firstChangeRowIn stays inside the file");
 
-  const pf2 = new Map([["a.js", { loaded: true, rows, expanded: new Set(), full: false }]]);
+  const pf2 = new Map([["a.js", { loaded: true, rows, expanded: new Map(), full: false }]]);
   const loading = RM.buildStream({ files, selected: sel, collapsed: new Set(), perFile: pf2 });
   assert.ok(RM.firstChangeRowIn(loading.items, loading.segments, "b.js") === null, "unloaded file → null");
   assert.ok(RM.firstChangeRowIn(reading.items, reading.segments, "zzz.js") === null, "unknown file → null");
@@ -453,8 +498,8 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   const files3 = [...files, { path: "c.js", additions: 1, deletions: 0 }];
   const sel3 = new Set(["a.js", "b.js", "c.js"]);
   const pf3 = new Map([
-    ["a.js", { loaded: true, rows, expanded: new Set(), full: false }],
-    ["c.js", { loaded: true, rows, expanded: new Set(), full: false }],
+    ["a.js", { loaded: true, rows, expanded: new Map(), full: false }],
+    ["c.js", { loaded: true, rows, expanded: new Map(), full: false }],
   ]);
   const skip = RM.buildStream({ files: files3, selected: sel3, collapsed: new Set(), perFile: pf3 });
   const fromBpastC = RM.firstRowFrom(skip.items, skip.segments, "b.js");
@@ -493,8 +538,8 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
     { path: "a.js", additions: 1, deletions: 1, status: "modified" },
     { path: "b.js", additions: 1, deletions: 1, status: "modified" },
   ];
-  const stA = { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false };
-  const stB = { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false };
+  const stA = { loaded: true, rows: mkRows(20, 10), expanded: new Map(), full: false };
+  const stB = { loaded: true, rows: mkRows(20, 10), expanded: new Map(), full: false };
   const perFile = new Map([
     ["a.js", stA],
     ["b.js", stB],
@@ -523,12 +568,12 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   // 2. opening a fold invalidates just that file's cache and reflects the change.
   const foldItem = bodyA1.find((it) => it.k === "fold");
   assert.ok(foldItem, "fixture has a fold to open");
-  stA.expanded = new Set([foldItem.id]);
+  stA.expanded = new Map([[foldItem.id, { head: 999, tail: 0 }]]);
   const r3 = RM.buildStream(mkBase());
   const bodyA3 = bodyOf(r3, 0);
   assert.notStrictEqual(bodyA3[0], bodyA1[0], "opening a fold invalidates the cached body");
   assert.ok(!bodyA3.some((it) => it.k === "fold" && it.id === foldItem.id), "the opened fold no longer renders as a marker");
-  stA.expanded = new Set(); // restore, so later steps compare against the same baseline
+  stA.expanded = new Map(); // restore, so later steps compare against the same baseline
 
   // 3. changing the view invalidates the cache and re-stamps v on the rows.
   const rSplit = RM.buildStream(mkBase({ view: "split" }));
@@ -557,8 +602,8 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   // 6. equivalence: memoized output deep-equals a completely fresh, un-memoized
   //    build — same kinds, same order, same v/sg stamps.
   const freshPerFile = new Map([
-    ["a.js", { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false }],
-    ["b.js", { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false }],
+    ["a.js", { loaded: true, rows: mkRows(20, 10), expanded: new Map(), full: false }],
+    ["b.js", { loaded: true, rows: mkRows(20, 10), expanded: new Map(), full: false }],
   ]);
   const memoized = RM.buildStream(mkBase({ annotations: ann2 }));
   const fresh = RM.buildStream({ ...mkBase({ annotations: ann2 }), perFile: freshPerFile });

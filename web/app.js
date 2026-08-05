@@ -1018,7 +1018,7 @@ async function loadFileDiff(path) {
       loaded: true,
       rows: d.rows || null,
       fullRows: null,
-      expanded: new Set(),
+      expanded: new Map(),
       full: false,
       binary: d.binary,
       tooBig: d.tooBig,
@@ -1036,7 +1036,7 @@ async function loadFileDiff(path) {
       loaded: true,
       rows: null,
       fullRows: null,
-      expanded: new Set(),
+      expanded: new Map(),
       full: false,
       error: "could not load diff",
     });
@@ -1204,7 +1204,7 @@ function buildItems() {
       fullRows: S.treeRows,
       annotations: S.ann,
       file: S.selFile,
-      expanded: new Set(),
+      expanded: new Map(),
       full: true,
       view: S.view,
     });
@@ -1302,10 +1302,20 @@ const ROW_HTML = {
 
   /* Fold ids repeat across the stream ("f12" exists in every file), so the
      marker has to name the file it belongs to or a click would expand the
-     wrong one. */
+     wrong one. A gap bigger than a chunk expands only through its two
+     directional buttons, twenty lines at a time; once the remainder fits in
+     one chunk the marker falls back to the plain click-to-expand row. */
   fold(item, top) {
-    return `<div class="fold" style="top:${top}px" data-fold="${item.id}" data-file="${esc(item.f)}">
-      <span>⌄</span> ${item.count} unmodified line${item.count === 1 ? "" : "s"} — click to expand</div>`;
+    const chunk = RM.GEOM.chunk;
+    const attrs = `style="top:${top}px" data-fold="${item.id}" data-file="${esc(item.f)}" data-count="${item.count}"`;
+    if (item.count <= chunk) {
+      return `<div class="fold" ${attrs}>
+        <span>⌄</span> ${item.count} unmodified line${item.count === 1 ? "" : "s"} — click to expand</div>`;
+    }
+    return `<div class="fold chunky" ${attrs}>
+      <button class="fbtn" data-dir="down" title="Show the next ${chunk} lines, after the change above">⤓ ${chunk}</button>
+      <span>${item.count} unmodified lines</span>
+      <button class="fbtn" data-dir="up" title="Show the ${chunk} lines before the change below">⤒ ${chunk}</button></div>`;
   },
 
   /** The bar between two files: name, counts, position, collapse toggle. */
@@ -1600,7 +1610,20 @@ $("#diffBody").addEventListener("click", (e) => {
     // Fold state belongs to a file; the marker says which one it came from.
     const st = S.perFile.get(fold.dataset.file);
     if (!st) return;
-    st.expanded.add(fold.dataset.fold);
+    const id = fold.dataset.fold;
+    const remaining = +fold.dataset.count || 0;
+    const chunk = RM.GEOM.chunk;
+    const cur = st.expanded.get(id) || { head: 0, tail: 0 };
+    const dir = e.target.closest("[data-dir]");
+    if (dir) {
+      const n = Math.min(chunk, remaining);
+      if (dir.dataset.dir === "down") st.expanded.set(id, { head: cur.head + n, tail: cur.tail });
+      else st.expanded.set(id, { head: cur.head, tail: cur.tail + n });
+    } else if (remaining <= chunk) {
+      st.expanded.set(id, { head: cur.head + remaining, tail: cur.tail });
+    } else {
+      return; // a big gap opens only through its buttons — no accidental 80-line dumps
+    }
     // Opening a fold grows the stream, which can invalidate a header pin — the
     // one rebuild path knows that; buildItems + refresh on their own did not.
     rebuildStream();

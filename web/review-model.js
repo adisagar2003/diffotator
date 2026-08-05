@@ -27,6 +27,7 @@
     cardPad: 14,
     cardMaxLines: 4, // comment bodies are line-clamped to this
     context: 3, // unmodified lines kept either side of a change
+    chunk: 20, // lines a directional fold click reveals; gaps at or under this open whole
     allViewed: 96, // .avc height in style.css — border-box, must match exactly
   };
 
@@ -103,7 +104,9 @@
    * @param {object[]} [input.fullRows]    whole-file rows, for an untouched file
    * @param {object[]} [input.annotations] every annotation in the session
    * @param {string} input.file            the file being shown
-   * @param {Set<string>} [input.expanded] fold ids the reader has opened
+   * @param {Map<string,{head:number,tail:number}>} [input.expanded]
+   *   lines the reader has revealed per fold: `head` from the gap's start,
+   *   `tail` from its end. A fold whose reveals meet emits only rows.
    * @param {boolean} [input.full]         stop folding entirely
    * @param {string} [input.view]          "split" | "unified" (a request, not a promise)
    * @param {number} [input.context]       unmodified lines to keep around a change
@@ -115,7 +118,7 @@
       fullRows,
       annotations = [],
       file,
-      expanded = new Set(),
+      expanded = new Map(),
       full = false,
       view = "split",
       context = GEOM.context,
@@ -195,11 +198,18 @@
       const start = i;
       while (i < units.length && !keep[i]) i++;
       const id = "f" + start;
-      if (expanded.has(id)) {
-        for (let j = start; j < i; j++) pushRow(units[j], j);
-      } else {
-        items.push({ k: "fold", id, count: i - start, from: start, to: i, f: file });
+      const count = i - start;
+      // Reveals are clamped here, not at write time: a fold can shrink when a
+      // comment lands inside it and re-splits the gap, and a stale over-count
+      // must not push rows past the gap's end.
+      const ex = expanded.get(id) || { head: 0, tail: 0 };
+      const head = Math.min(ex.head || 0, count);
+      const tail = Math.min(ex.tail || 0, count - head);
+      for (let j = start; j < start + head; j++) pushRow(units[j], j);
+      if (head + tail < count) {
+        items.push({ k: "fold", id, count: count - head - tail, from: start + head, to: i - tail, f: file });
       }
+      for (let j = i - tail; j < i; j++) pushRow(units[j], j);
     }
 
     // Widest line decides how far the shared pan scrollbar can travel.
@@ -230,6 +240,7 @@
         stats: f,
         collapsed: collapsed.has(f.path),
         viewed: viewedSet.has(f.path),
+        full: !!st.full, // the header row carries the Full-file pill's state
         idx: idx++,
         count: shown.length,
       });
@@ -258,8 +269,13 @@
              identity, which is checked separately since a fresh diff arrival
              replaces `st` wholesale rather than mutating rows in place. */
           const annsForFile = annotations.filter((a) => a.file === f.path);
-          const key =
-            view + "|" + !!st.full + "|" + [...(st.expanded || [])].sort().join(",") + "|" + JSON.stringify(annsForFile);
+          // Reveal counts are part of the fold's identity now, not just its id —
+          // a second click on the same fold must miss the memo.
+          const foldKey = [...(st.expanded || new Map())]
+            .map(([id, ex]) => `${id}:${ex.head || 0}+${ex.tail || 0}`)
+            .sort()
+            .join(",");
+          const key = view + "|" + !!st.full + "|" + foldKey + "|" + JSON.stringify(annsForFile);
           let memo = st.stream;
           if (!memo || st.streamKey !== key || memo.rows !== st.rows || memo.fullRows !== st.fullRows) {
             const one = buildItems({
@@ -267,7 +283,7 @@
               fullRows: st.fullRows,
               annotations,
               file: f.path,
-              expanded: st.expanded || new Set(),
+              expanded: st.expanded || new Map(),
               full: !!st.full,
               view,
             });
@@ -348,6 +364,27 @@
     while (i >= 0 && !isChangeRow(items[i])) i--;
     while (i > 0 && isChangeRow(items[i - 1])) i--;
     return i >= 0 ? i : -1;
+  }
+
+  /**
+   * Where the reader stands among a file's change blocks: `cur` is the last
+   * block starting at or before item index `at` (0 when still above the first),
+   * `total` the block count in [start, end). Feeds the "change 3 of 12" counter
+   * next to the prev/next arrows, walking blocks exactly as `findChange` does.
+   */
+  function changePos(items, start, end, at) {
+    let total = 0;
+    let cur = 0;
+    let inBlock = false;
+    for (let i = start; i < end; i++) {
+      const c = isChangeRow(items[i]);
+      if (c && !inBlock) {
+        total++;
+        if (i <= at) cur = total;
+      }
+      inBlock = c;
+    }
+    return { cur, total };
   }
 
   /**
@@ -587,6 +624,7 @@
   exp.rowLine = rowLine;
   exp.rowIndexFor = rowIndexFor;
   exp.findChange = findChange;
+  exp.changePos = changePos;
   exp.focusStep = focusStep;
   exp.searchHits = searchHits;
   exp.nextUnviewed = nextUnviewed;
