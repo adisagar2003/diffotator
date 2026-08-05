@@ -1531,6 +1531,7 @@ function renderTreeFile(head) {
   // stale segments around for scrollToFile/currentSeg to trust.
   S.segments = [];
   const path = S.selFile || "";
+  head.hidden = false; // the Changes tab may have left it hidden over a collapsed top file
   head.dataset.file = ""; // the sticky header owns this on the other tab
   if (!path) {
     head.innerHTML = "";
@@ -1613,6 +1614,16 @@ function updateStickyHeader(force) {
     head.dataset.file = ""; // or the next scroll back into this file would find a match and skip
     return;
   }
+  /* A collapsed file whose header row is itself at the top of the viewport
+     needs no sticky copy — the bar exists to restate a header that scrolled
+     off, and with nothing scrolled off it read as a duplicated first row
+     (arrows and all) whenever the stream was mostly folded. */
+  if (diffVL.topIndex() === seg.start && isCollapsed(seg.file)) {
+    head.hidden = true;
+    head.dataset.file = ""; // forces a fresh render when the bar returns
+    return;
+  }
+  head.hidden = false;
   if (!force && head.dataset.file === seg.file) return; // cheap on every scroll tick
   head.dataset.file = seg.file;
   if (S.selFile !== seg.file) {
