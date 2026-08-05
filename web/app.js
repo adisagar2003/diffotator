@@ -2006,12 +2006,20 @@ function setTab(tab) {
   setListMode(tab !== "tree");
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
   $("#streamSummary").hidden = tab === "tree"; // renderProgress re-shows it with fresh numbers
-  // A ghosted bar (collapsed top file on the Changes tab) must not carry over —
-  // the tree tab would have no header at all until a file is picked.
-  if (tab === "tree") $("#diffHeader").classList.remove("ghost");
-  if (tab === "tree" && !S.treePaths) {
-    loadTree();
-    return; // loadTree renders the file list itself once paths arrive
+  if (tab === "tree") {
+    // Neither branch below re-renders the header, so whatever the Changes tab
+    // left in it — a filename and live pills for a file this tab isn't showing
+    // — would sit there until the first tree click. Blank it: the bare strip
+    // is renderTreeFile's own no-file-picked state. Unghost too, or a
+    // collapsed top file would leave the tree tab with no header at all.
+    const head = $("#diffHeader");
+    head.classList.remove("ghost");
+    head.innerHTML = "";
+    head.dataset.file = "";
+    if (!S.treePaths) {
+      loadTree();
+      return; // loadTree renders the file list itself once paths arrive
+    }
   }
   renderFileTree();
   // Leaving the File Tree tab's one-file view behind in #diffBody until the next
