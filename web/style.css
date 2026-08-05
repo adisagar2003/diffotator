@@ -41,7 +41,6 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .pfill{position:absolute;left:0;top:0;bottom:0;background:var(--accent-dim);transition:width .18s}
 .ptext{position:relative;padding:0 9px;font-size:10.5px;color:var(--text-dim);white-space:nowrap}
 .ptext .a{color:#4fae63}.ptext .d{color:#d1596a}
-.tgl.viewed{padding:1px 7px;border:1px solid var(--border);border-radius:5px;background:var(--elev)}
 .tnode.seen .nm,.tnode.seen .stat{opacity:.45}
 .tnode.seen .caret{color:var(--ok);opacity:1;font-size:11px;font-weight:700}
 .chip.scope{color:#9fd0ff;border-color:#2d4c7e;background:#1b2a3f}
@@ -78,6 +77,7 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
    pseudo-element, not an outline: diff rows and file rows paint over their
    ancestor's own border. */
 #sidebar,#leftPane,#commentsPanel{position:relative}
+#sidebar.off{display:none}
 #sidebar:focus-within::after,#commitPane:focus-within::after,#leftPane:focus-within::after,
 #rightPane:focus-within::after,#commentsPanel:focus-within::after{
   content:"";position:absolute;inset:0;pointer-events:none;z-index:20;
@@ -149,7 +149,15 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .tab.active{color:var(--text);background:var(--bg);box-shadow:inset 0 -2px 0 var(--accent)}
 .tabbar-spacer{flex:1}
 .diff-tools{display:flex;align-items:center;gap:10px;padding-right:10px}
-.tgl{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--text-dim);cursor:pointer}
+/* Review totals + the one bulk action, sitting left of the view toggle. */
+.stream-summary{display:flex;align-items:center;gap:8px;padding-right:12px;font-size:11.5px;color:var(--text-dim);font-family:var(--ui);white-space:nowrap}
+.stream-summary .a{color:#4fae63;font-family:var(--mono)}
+.stream-summary .d{color:#d1596a;font-family:var(--mono)}
+.ss-div{width:1px;height:14px;background:var(--border)}
+.ss-meter{width:90px;height:4px;border-radius:2px;background:var(--elev2);overflow:hidden}
+.ss-meter span{display:block;height:100%;background:var(--ok);transition:width .18s}
+.stream-summary .btn{height:22px;padding:0 8px;font-size:11px;border:1px solid var(--border)}
+.stream-summary .btn[disabled]{opacity:.45;cursor:default}
 .seg{display:flex;border:1px solid var(--border);border-radius:5px;overflow:hidden;height:21px}
 .seg-btn{border:0;background:var(--elev);padding:0 9px;font-size:11.5px;color:var(--text-dim);cursor:pointer}
 .seg-btn.active{background:var(--accent);color:#fff}
@@ -199,9 +207,11 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .icotog:hover{color:var(--accent);background:var(--elev2)}
 
 /* ---------- diff ---------- */
+/* Visibly a status bar, not another stream row: blue-tinted ground and an
+   accent keel line under it, so it can never be misread as a file entry. */
 .diff-header{
   height:32px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 10px;
-  background:var(--panel);border-bottom:1px solid var(--border);font-size:12px;color:var(--text-dim);
+  background:#1f2733;border-bottom:1px solid var(--accent-dim);font-size:12px;color:var(--text-dim);
   white-space:nowrap;overflow:hidden
 }
 .diff-header .fp{overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
@@ -215,11 +225,16 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .diff-header .grow{flex:1}
 .diff-header .nav{display:flex;gap:2px}
 .diff-header .nav button{width:22px;height:20px;border-radius:4px;border:1px solid var(--border);background:var(--elev);cursor:pointer;font-size:10px;padding:0}
-.diff-header .caret{width:11px;flex:0 0 auto;color:var(--muted);font-size:9px;cursor:pointer}
+/* One unit, counter between the arrows: the buttons visibly step the number,
+   which is the whole explanation of what they do. */
+.diff-header .stepper{display:flex;align-items:center;gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--bg)}
+.diff-header .stepper button{width:24px;height:20px;border:0;border-radius:0;background:transparent;color:var(--text-dim);cursor:pointer;font-size:9px;padding:0}
+.diff-header .stepper button:hover{background:var(--elev2);color:var(--text)}
+.diff-header .stepper .chg{padding:0 8px;border-left:1px solid var(--border-soft);border-right:1px solid var(--border-soft);font-size:11px;color:var(--text-dim);white-space:nowrap;font-variant-numeric:tabular-nums}
+.diff-header .caret{width:16px;flex:0 0 auto;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
 .diff-header .caret:hover{color:var(--text)}
-.diff-header .shbox{cursor:pointer;flex:0 0 auto;font-size:11px;opacity:.8}
-.diff-header .shbox:hover{opacity:1}
-.diff-header .shbox.on{color:var(--accent)}
+.diff-header .caret svg{width:13px;height:13px;transition:transform .12s}
+.diff-header .caret.open svg{transform:rotate(90deg)}
 .diff-header .fp{cursor:pointer}
 .diff-header .fp:hover b{text-decoration:underline}
 
@@ -284,6 +299,15 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
   border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft);font-family:var(--ui)
 }
 .fold:hover{background:var(--elev);color:var(--text)}
+/* A gap too big to dump at once: the row itself is inert, the two directional
+   buttons each reveal one chunk. */
+.fold.chunky{cursor:default;gap:10px}
+.fold.chunky:hover{background:#1f2226;color:var(--muted)}
+.fbtn{
+  font:11px/18px var(--ui);color:var(--text-dim);background:var(--elev2);
+  border:1px solid var(--border);border-radius:4px;padding:0 8px;cursor:pointer
+}
+.fbtn:hover{background:var(--elev);color:var(--text);border-color:var(--accent)}
 /* A file's bar inside the stream. Height is exactly RM.GEOM.fileHeader (32) —
    box-sizing:border-box means the two borders live inside it — or the windowed
    list's prefix-sum index would drift a pixel per file. */
@@ -294,15 +318,42 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
   color:var(--text-dim);white-space:nowrap;overflow:hidden;cursor:pointer
 }
 .fsh:hover{background:var(--elev)}
-.fsh .caret{width:11px;flex:0 0 auto;color:var(--muted);font-size:9px}
+/* Which row you are on (blue) and what is done (green), readable from the
+   list's left edge without reading any pill. */
+.fsh .rail{position:absolute;left:0;top:-1px;bottom:-1px;width:3px}
+.fsh.cur .rail{background:var(--accent)}
+.fsh.seen .rail{background:var(--ok)}
+.fsh.cur{background:var(--elev)}
+.fsh .caret{width:16px;flex:0 0 auto;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.fsh .caret:hover{color:var(--text)}
+.fsh .caret svg{width:13px;height:13px;transition:transform .12s}
+.fsh .caret.open svg{transform:rotate(90deg)}
 .fsh .fp{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
-.fsh.seen .fp{opacity:.6}
+/* A viewed row recedes as a whole — darker ground, muted name, washed counts. */
+.fsh.seen{background:#1d1f22}
+.fsh.seen .fp{opacity:.55}
+.fsh.seen .plus,.fsh.seen .minus{opacity:.5}
 .fsh.closed{color:var(--muted)}
-.fsh .vchip{font-size:10px;padding:0 6px;border-radius:9px;background:#173a24;border:1px solid #2b6b3e;color:#7fbf90}
 .fsh .old{color:var(--muted);overflow:hidden;text-overflow:ellipsis}
 .fsh .pos{font-size:11px;color:var(--muted)}
 .fsh .plus{color:#4fae63;font-family:var(--mono);font-size:11.5px}
 .fsh .minus{color:#d1596a;font-family:var(--mono);font-size:11.5px}
+/* The per-file controls. Fixed-width group so the pill column lines up down
+   the stream; untouched pills sit at 40% and come to strength on hover or on
+   the active row. Viewed filled (a done-state), Full file outlined (a mode). */
+.pills{display:flex;gap:6px;flex:0 0 148px;justify-content:flex-end;align-items:center}
+.pill{
+  font:11px/20px var(--ui);padding:0 9px;border-radius:10px;cursor:pointer;
+  background:transparent;border:1px solid var(--border);color:var(--text-dim);
+  opacity:.4;transition:opacity .12s ease;white-space:nowrap
+}
+.fsh:hover .pill,.fsh.cur .pill,.diff-header .pill{opacity:1}
+.pill:hover{border-color:var(--text-dim);color:var(--text)}
+.pill.pviewed .ck{display:inline-block;width:12px;text-align:left}
+.pill.pviewed.on{background:var(--ok);border-color:var(--ok);color:#0d1512;font-weight:600;opacity:1}
+.pill.pviewed.on:hover{border-color:var(--ok);color:#0d1512}
+.pill.pfull.on{background:#1b2a3f;border-color:var(--accent);color:#9fd0ff;opacity:1}
+.pill.pfull.on:hover{border-color:var(--accent);color:#9fd0ff}
 /* Not a diff and not a fold — a sentence about why a file has nothing to show. */
 .fold.note{font-style:italic;cursor:default}
 .fold.note:hover{background:#1f2226;color:var(--muted)}
@@ -357,16 +408,38 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .k{color:#c792ea}.s{color:#c3e88d}.n{color:#f78c6c}.c{color:#5f6773;font-style:italic}
 .f{color:#82aaff}.t{color:#ffcb6b}.p{color:#89ddff}
 
-/* ---------- commit detail ---------- */
-.detail{position:absolute;inset:0;overflow:auto;padding:16px 20px;background:var(--bg);font-family:var(--ui)}
-.detail .dl{display:grid;grid-template-columns:80px 1fr;gap:5px 14px;font-size:12.5px;margin-bottom:14px}
-.detail .dt{color:var(--muted);text-transform:uppercase;font-size:10.5px;letter-spacing:.6px;padding-top:2px}
-.detail .subject{font-size:15px;font-weight:600;margin:6px 0 10px}
-.detail pre{
-  font:12.5px/1.6 var(--mono);white-space:pre-wrap;background:var(--panel);border:1px solid var(--border);
-  border-radius:6px;padding:12px;margin:0
+/* ---------- commit info card (left pane, above the timeline) ---------- */
+.commit-info{
+  flex:0 0 auto;padding:7px 10px;background:var(--elev);border-top:1px solid var(--border);
+  font-family:var(--ui);overflow:auto
 }
-.detail .mono{font-family:var(--mono);font-size:12px}
+.cb-head{display:flex;align-items:baseline;gap:8px}
+.cb-subject{font-size:12.5px;font-weight:600;flex:1;min-width:0}
+.cb-meta{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-top:3px;font-size:11px;color:var(--muted)}
+.cb-meta .mono{font-family:var(--mono);font-size:10.5px}
+.cb-body{
+  font:11.5px/1.55 var(--mono);white-space:pre-wrap;background:var(--panel);border:1px solid var(--border);
+  border-radius:6px;padding:7px 9px;margin:7px 0 2px;max-height:9em;overflow:auto
+}
+
+/* ---------- commit timeline ---------- */
+#timelinePane{flex:0 0 auto;height:180px;display:flex;flex-direction:column;min-height:0;background:var(--panel)}
+.tl-head{display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid var(--border-soft);font-size:11.5px;color:var(--text-dim)}
+.tl-caret{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:10px;padding:0 2px}
+/* Collapsed to its header bar, editor-style; the inline height from prefs must lose. */
+#timelinePane.closed{height:auto !important}
+#timelinePane.closed .tl-list{display:none}
+#timelinePane.closed .tl-head{border-bottom:0}
+.tl-head .tl-title{flex:1}
+.tl-list{flex:1;overflow:auto;padding:3px 0}
+.tl-row{display:flex;align-items:center;gap:7px;padding:3px 10px;font-size:12px;cursor:pointer;white-space:nowrap}
+.tl-row:hover{background:var(--elev)}
+.tl-row.sel{background:var(--sel)}
+.tl-sha{font-family:var(--mono);font-size:11px;color:var(--muted);flex:0 0 auto}
+.tl-sub{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tl-row.all .tl-sub{font-weight:600}
+.tl-row.dim{opacity:.4}
+.tl-tag{margin-left:auto;flex:0 0 auto;font-size:9px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:0 4px}
 
 /* ---------- comments panel ---------- */
 #commentsPanel{width:320px;flex:0 0 auto;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column}

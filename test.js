@@ -31,6 +31,74 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.ok(out.includes("Looks close."), "summary included");
 }
 
+// A comment tagged with the commit it was written against says so on its
+// location line; untagged comments render exactly as before.
+{
+  const out = render({
+    decision: "annotated",
+    repo: "demo",
+    scope: { type: "range", base: "origin/main" },
+    annotations: [
+      { file: "a.ts", side: "new", line: 3, label: "nit", body: "rename", commit: { sha: "abcdef1234567890", short: "abcdef1", subject: "feat: add thing" } },
+      { file: "a.ts", side: "new", line: 12, label: "issue", body: "untagged" },
+    ],
+  });
+  assert.ok(out.includes('re: commit abcdef1 "feat: add thing"'), "commit tag rendered");
+  assert.strictEqual(out.match(/re: commit/g).length, 1, "only the tagged comment carries it");
+}
+
+// --- commit timeline (panel contract) ---------------------------------------
+{
+  const commits = [
+    { sha: "c2".repeat(20), short: "c2c2c2c", subject: "second" },
+    { sha: "c1".repeat(20), short: "c1c1c1c", subject: "first" },
+  ];
+  const rows = RM.timelineRows(commits, null, "upto");
+  assert.strictEqual(rows[0].kind, "all");
+  assert.ok(rows[0].sel, "no selection = the full branch row is active");
+  assert.strictEqual(rows.length, 3);
+  assert.ok(rows.every((r) => r.included), "no selection dims nothing");
+  // commits arrive newest-first; selecting the older one in "up to here" mode
+  // includes it and dims the newer row above it.
+  const sel = RM.timelineRows(commits, commits[1].sha, "upto");
+  assert.ok(!sel[0].sel && sel[2].sel, "selection moves off the all-row onto the commit");
+  assert.ok(!sel[1].included && sel[2].included, "up-to-here dims commits newer than the selection");
+  const only = RM.timelineRows(commits, commits[0].sha, "only");
+  assert.ok(only[1].included && !only[2].included, "this-commit includes the selection alone");
+  assert.deepStrictEqual(
+    RM.timelineScope({ base: "origin/main", head: "HEAD", sel: null, mode: "only" }),
+    { type: "range", base: "origin/main", head: "HEAD" },
+    "no selection is the full range whatever the toggle says"
+  );
+  assert.deepStrictEqual(
+    RM.timelineScope({ base: "origin/main", head: "HEAD", sel: "abc123", mode: "upto" }),
+    { type: "range", base: "origin/main", head: "abc123" },
+    "up-to-here accumulates from the base through the selected commit"
+  );
+  assert.deepStrictEqual(
+    RM.timelineScope({ base: "origin/main", head: "HEAD", sel: "abc123", mode: "only" }),
+    { type: "commit", sha: "abc123" },
+    "this-commit narrows to the commit alone"
+  );
+
+  // Tag at creation, never re-tag.
+  const meta = { sha: "abc123", short: "abc123x", subject: "feat: x" };
+  assert.deepStrictEqual(
+    RM.annCommit(null, { type: "commit", sha: "abc123" }, meta),
+    { sha: "abc123", short: "abc123x", subject: "feat: x" },
+    "new comment in a commit scope is tagged"
+  );
+  assert.strictEqual(RM.annCommit(null, { type: "range", base: "b" }, meta), null, "range comments carry nothing");
+  assert.deepStrictEqual(
+    RM.annCommit(null, { type: "commit", sha: "ffff123" }, meta),
+    { sha: "ffff123", short: "ffff123", subject: "" },
+    "stale metadata degrades to the sha alone"
+  );
+  const kept = { commit: { sha: "old", short: "old", subject: "s" } };
+  assert.strictEqual(RM.annCommit(kept, { type: "commit", sha: "abc123" }, meta), kept.commit, "edits keep the original tag");
+  assert.strictEqual(RM.annCommit({ id: "a1" }, { type: "commit", sha: "abc123" }, meta), null, "an untagged comment stays untagged through edits");
+}
+
 // --- highlighter + word diff -----------------------------------------------
 {
   global.window = {};
@@ -78,9 +146,49 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.strictEqual(items[items.length - 1].count, 11, "trailing run folded too");
 
   // A fold the reader opened must render its rows instead.
-  const opened = RM.buildItems({ ...base, expanded: new Set(["f0"]) });
+  const opened = RM.buildItems({ ...base, expanded: new Map([["f0", { head: 999, tail: 0 }]]) });
   assert.strictEqual(opened.items.filter((x) => x.k === "fold").length, 1, "opened fold is gone");
   assert.strictEqual(opened.items[0].k, "row", "…and its rows are back");
+
+  // Chunked reveal: the trailing fold is 11 lines (units 14..24). A head
+  // reveal shows the gap's first lines and the fold marker follows, count
+  // reduced; a tail reveal shows the gap's last lines after the marker.
+  {
+    const foldId = items[items.length - 1].id;
+    const part = RM.buildItems({ ...base, expanded: new Map([[foldId, { head: 4, tail: 2 }]]) });
+    const fi = part.items.findIndex((x) => x.k === "fold" && x.id === foldId);
+    assert.ok(fi > 0, "partially revealed fold still shows a marker");
+    assert.strictEqual(part.items[fi].count, 5, "count is the unrevealed remainder");
+    // 4 rows immediately before the marker are the head reveal, in order…
+    const before = part.items.slice(fi - 4, fi);
+    assert.ok(before.every((x) => x.k === "row"), "head reveal renders rows above the marker");
+    assert.deepStrictEqual(
+      before.map((x) => x.u.r.n),
+      [15, 16, 17, 18],
+      "head reveal continues downward from the change above"
+    );
+    // …and the tail rows close the file below it.
+    const after = part.items.slice(fi + 1);
+    assert.deepStrictEqual(after.map((x) => x.u.r.n), [24, 25], "tail reveal sits above the change below");
+
+    // Reveals meeting (or overshooting) the gap dissolve the fold entirely.
+    const done = RM.buildItems({ ...base, expanded: new Map([[foldId, { head: 6, tail: 8 }]]) });
+    assert.ok(!done.items.some((x) => x.k === "fold" && x.id === foldId), "met reveals dissolve the fold");
+    assert.strictEqual(
+      done.items.filter((x) => x.k === "row").length,
+      7 + 11,
+      "…and every gap line renders exactly once despite the overshoot"
+    );
+  }
+
+  // changeStarts: one change block in this fixture, starting where the first
+  // non-context row sits; consecutive change rows collapse into one start.
+  {
+    const first = items.findIndex((x) => x.k === "row" && x.u.t !== "ctx");
+    assert.ok(first > 0, "fixture has a change block");
+    assert.deepStrictEqual(RM.changeStarts(items, 0, items.length), [first], "one block, starting at the change row");
+    assert.deepStrictEqual(RM.changeStarts(items, 0, first), [], "range ending before the block finds none");
+  }
 
   // "Full file" stops folding altogether without losing the add/del marks.
   const full = RM.buildItems({ ...base, full: true });
@@ -217,8 +325,8 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
     { path: "c.js", additions: 0, deletions: 0, status: "modified" },
   ];
   const perFile = new Map([
-    ["a.js", { loaded: true, rows: mkRows(10, 5), expanded: new Set(), full: false }],
-    ["b.js", { loaded: true, rows: mkRows(10, 5), expanded: new Set(), full: false }],
+    ["a.js", { loaded: true, rows: mkRows(10, 5), expanded: new Map(), full: false }],
+    ["b.js", { loaded: true, rows: mkRows(10, 5), expanded: new Map(), full: false }],
     // c.js not loaded yet
   ]);
   const base = {
@@ -271,7 +379,7 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
     rows: perFile.get("a.js").rows,
     annotations: [],
     file: "a.js",
-    expanded: new Set(),
+    expanded: new Map(),
     full: false,
     view: "unified",
   });
@@ -337,8 +445,8 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
     { t: "add", n: 2, s: "two" },
   ];
   const pf = new Map([
-    ["a.js", { loaded: true, rows, expanded: new Set(), full: false }],
-    ["b.js", { loaded: true, rows, expanded: new Set(), full: false }],
+    ["a.js", { loaded: true, rows, expanded: new Map(), full: false }],
+    ["b.js", { loaded: true, rows, expanded: new Map(), full: false }],
   ]);
   const sel = new Set(["a.js", "b.js"]);
 
@@ -367,7 +475,7 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.ok(hit && hit.side === "new" && hit.line === 2, "firstChangeRowIn skips ctx, finds the add");
   assert.ok(reading.items[hit.index].f === "b.js", "firstChangeRowIn stays inside the file");
 
-  const pf2 = new Map([["a.js", { loaded: true, rows, expanded: new Set(), full: false }]]);
+  const pf2 = new Map([["a.js", { loaded: true, rows, expanded: new Map(), full: false }]]);
   const loading = RM.buildStream({ files, selected: sel, collapsed: new Set(), perFile: pf2 });
   assert.ok(RM.firstChangeRowIn(loading.items, loading.segments, "b.js") === null, "unloaded file → null");
   assert.ok(RM.firstChangeRowIn(reading.items, reading.segments, "zzz.js") === null, "unknown file → null");
@@ -385,8 +493,8 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   const files3 = [...files, { path: "c.js", additions: 1, deletions: 0 }];
   const sel3 = new Set(["a.js", "b.js", "c.js"]);
   const pf3 = new Map([
-    ["a.js", { loaded: true, rows, expanded: new Set(), full: false }],
-    ["c.js", { loaded: true, rows, expanded: new Set(), full: false }],
+    ["a.js", { loaded: true, rows, expanded: new Map(), full: false }],
+    ["c.js", { loaded: true, rows, expanded: new Map(), full: false }],
   ]);
   const skip = RM.buildStream({ files: files3, selected: sel3, collapsed: new Set(), perFile: pf3 });
   const fromBpastC = RM.firstRowFrom(skip.items, skip.segments, "b.js");
@@ -425,8 +533,8 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
     { path: "a.js", additions: 1, deletions: 1, status: "modified" },
     { path: "b.js", additions: 1, deletions: 1, status: "modified" },
   ];
-  const stA = { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false };
-  const stB = { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false };
+  const stA = { loaded: true, rows: mkRows(20, 10), expanded: new Map(), full: false };
+  const stB = { loaded: true, rows: mkRows(20, 10), expanded: new Map(), full: false };
   const perFile = new Map([
     ["a.js", stA],
     ["b.js", stB],
@@ -455,12 +563,12 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   // 2. opening a fold invalidates just that file's cache and reflects the change.
   const foldItem = bodyA1.find((it) => it.k === "fold");
   assert.ok(foldItem, "fixture has a fold to open");
-  stA.expanded = new Set([foldItem.id]);
+  stA.expanded = new Map([[foldItem.id, { head: 999, tail: 0 }]]);
   const r3 = RM.buildStream(mkBase());
   const bodyA3 = bodyOf(r3, 0);
   assert.notStrictEqual(bodyA3[0], bodyA1[0], "opening a fold invalidates the cached body");
   assert.ok(!bodyA3.some((it) => it.k === "fold" && it.id === foldItem.id), "the opened fold no longer renders as a marker");
-  stA.expanded = new Set(); // restore, so later steps compare against the same baseline
+  stA.expanded = new Map(); // restore, so later steps compare against the same baseline
 
   // 3. changing the view invalidates the cache and re-stamps v on the rows.
   const rSplit = RM.buildStream(mkBase({ view: "split" }));
@@ -489,8 +597,8 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   // 6. equivalence: memoized output deep-equals a completely fresh, un-memoized
   //    build — same kinds, same order, same v/sg stamps.
   const freshPerFile = new Map([
-    ["a.js", { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false }],
-    ["b.js", { loaded: true, rows: mkRows(20, 10), expanded: new Set(), full: false }],
+    ["a.js", { loaded: true, rows: mkRows(20, 10), expanded: new Map(), full: false }],
+    ["b.js", { loaded: true, rows: mkRows(20, 10), expanded: new Map(), full: false }],
   ]);
   const memoized = RM.buildStream(mkBase({ annotations: ann2 }));
   const fresh = RM.buildStream({ ...mkBase({ annotations: ann2 }), perFile: freshPerFile });
@@ -590,6 +698,31 @@ assert.strictEqual(render({ decision: "dismissed" }), "Review session closed wit
   assert.deepStrictEqual(back.collapsed, ["s|a.js"], "collapse persisted");
   D.saveDraft(root, {}); // nothing left → draft file removed
   assert.strictEqual(D.loadDraft(root), null, "empty draft is cleared");
+
+  // --- prefs: key-level merge, validated, corruption degrades to {} ---------
+  assert.deepStrictEqual(D.loadPrefs(), {}, "no prefs yet is an empty object, not a crash");
+  D.savePrefs({ "panel.sidebar": 260, "panel.sidebarOff": true });
+  assert.deepStrictEqual(D.loadPrefs(), { "panel.sidebar": 260, "panel.sidebarOff": true }, "prefs round-trip");
+  // Two sessions each patch their own key; neither snapshot clobbers the other.
+  D.savePrefs({ "panel.timelineCollapsed": true });
+  assert.deepStrictEqual(
+    D.loadPrefs(),
+    { "panel.sidebar": 260, "panel.sidebarOff": true, "panel.timelineCollapsed": true },
+    "a patch merges instead of overwriting"
+  );
+  D.savePrefs({ "panel.sidebarOff": null });
+  assert.ok(!("panel.sidebarOff" in D.loadPrefs()), "null deletes a key");
+  // The POST body is untrusted: junk shapes and values are dropped, not stored.
+  assert.strictEqual(D.savePrefs("nonsense"), false, "non-object patch is rejected");
+  assert.strictEqual(D.savePrefs([1, 2, 3]), false, "array patch is rejected");
+  D.savePrefs({ "bad key!": 1, nested: { a: 1 }, big: "x".repeat(300), ok: 7 });
+  assert.deepStrictEqual(
+    D.loadPrefs(),
+    { "panel.sidebar": 260, "panel.timelineCollapsed": true, ok: 7 },
+    "invalid keys and non-primitive/oversized values are dropped"
+  );
+  fs.writeFileSync(path.join(dir, "prefs.json"), "{corrupt");
+  assert.deepStrictEqual(D.loadPrefs(), {}, "corrupt prefs file degrades to defaults");
   delete process.env.DIFFOTATOR_DATA_DIR;
 }
 
@@ -717,6 +850,17 @@ async function awkwardShapes() {
   // numstat compresses renames to `{old => new}`; unexpanded it reports +0/-0.
   assert.strictEqual(renamed.additions, 1, "renamed file keeps its line stats");
   assert.strictEqual(renamed.deletions, 1);
+
+  // The timeline wants the branch's own story: first-parent keeps the merge as
+  // one entry instead of spilling the merged branch's commits into the list.
+  const full = await G.log(root, { rev: `${ROOT}..HEAD` });
+  const story = await G.log(root, { rev: `${ROOT}..HEAD`, firstParent: true });
+  assert.strictEqual(full.length, 3, "plain range walk includes the merged-in commit");
+  assert.deepStrictEqual(
+    story.map((c) => c.subject),
+    ["merge feature", "main side"],
+    "first-parent walk is the branch's own commits"
+  );
 
   const crlf = await G.fileContent(root, { type: "commit", sha: ROOT }, "crlf.txt");
   assert.deepStrictEqual(crlf.rows.map((r) => r.s), ["one", "two"], "CRLF and phantom line stripped");

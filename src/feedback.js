@@ -59,7 +59,13 @@ function render({ annotations = [], summary = "", decision = "annotated", scope,
       out.push("");
       out.push(`### ${file}:${a.line} — ${label}${a.blocking ? " (blocking)" : ""}`);
       out.push("");
-      out.push(`*${loc}${side}*`);
+      // A comment written against one commit's diff says so: the line anchor
+      // belongs to that diff, and the sha tells the agent which layer to fix
+      // (amend that commit vs. patch on top).
+      const commit = a.commit && a.commit.sha
+        ? ` — re: commit ${a.commit.short || a.commit.sha.slice(0, 7)}${a.commit.subject ? ` "${a.commit.subject}"` : ""}`
+        : "";
+      out.push(`*${loc}${side}${commit}*`);
       if (a.code) {
         out.push("");
         out.push("```" + (a.lang || ""));

@@ -27,6 +27,7 @@
     cardPad: 14,
     cardMaxLines: 4, // comment bodies are line-clamped to this
     context: 3, // unmodified lines kept either side of a change
+    chunk: 20, // lines a directional fold click reveals; gaps at or under this open whole
     allViewed: 96, // .avc height in style.css — border-box, must match exactly
   };
 
@@ -103,7 +104,9 @@
    * @param {object[]} [input.fullRows]    whole-file rows, for an untouched file
    * @param {object[]} [input.annotations] every annotation in the session
    * @param {string} input.file            the file being shown
-   * @param {Set<string>} [input.expanded] fold ids the reader has opened
+   * @param {Map<string,{head:number,tail:number}>} [input.expanded]
+   *   lines the reader has revealed per fold: `head` from the gap's start,
+   *   `tail` from its end. A fold whose reveals meet emits only rows.
    * @param {boolean} [input.full]         stop folding entirely
    * @param {string} [input.view]          "split" | "unified" (a request, not a promise)
    * @param {number} [input.context]       unmodified lines to keep around a change
@@ -115,7 +118,7 @@
       fullRows,
       annotations = [],
       file,
-      expanded = new Set(),
+      expanded = new Map(),
       full = false,
       view = "split",
       context = GEOM.context,
@@ -195,11 +198,18 @@
       const start = i;
       while (i < units.length && !keep[i]) i++;
       const id = "f" + start;
-      if (expanded.has(id)) {
-        for (let j = start; j < i; j++) pushRow(units[j], j);
-      } else {
-        items.push({ k: "fold", id, count: i - start, from: start, to: i, f: file });
+      const count = i - start;
+      // Reveals are clamped here, not at write time: a fold can shrink when a
+      // comment lands inside it and re-splits the gap, and a stale over-count
+      // must not push rows past the gap's end.
+      const ex = expanded.get(id) || { head: 0, tail: 0 };
+      const head = Math.min(ex.head || 0, count);
+      const tail = Math.min(ex.tail || 0, count - head);
+      for (let j = start; j < start + head; j++) pushRow(units[j], j);
+      if (head + tail < count) {
+        items.push({ k: "fold", id, count: count - head - tail, from: start + head, to: i - tail, f: file });
       }
+      for (let j = i - tail; j < i; j++) pushRow(units[j], j);
     }
 
     // Widest line decides how far the shared pan scrollbar can travel.
@@ -230,6 +240,7 @@
         stats: f,
         collapsed: collapsed.has(f.path),
         viewed: viewedSet.has(f.path),
+        full: !!st.full, // the header row carries the Full-file pill's state
         idx: idx++,
         count: shown.length,
       });
@@ -258,8 +269,13 @@
              identity, which is checked separately since a fresh diff arrival
              replaces `st` wholesale rather than mutating rows in place. */
           const annsForFile = annotations.filter((a) => a.file === f.path);
-          const key =
-            view + "|" + !!st.full + "|" + [...(st.expanded || [])].sort().join(",") + "|" + JSON.stringify(annsForFile);
+          // Reveal counts are part of the fold's identity now, not just its id —
+          // a second click on the same fold must miss the memo.
+          const foldKey = [...(st.expanded || new Map())]
+            .map(([id, ex]) => `${id}:${ex.head || 0}+${ex.tail || 0}`)
+            .sort()
+            .join(",");
+          const key = view + "|" + !!st.full + "|" + foldKey + "|" + JSON.stringify(annsForFile);
           let memo = st.stream;
           if (!memo || st.streamKey !== key || memo.rows !== st.rows || memo.fullRows !== st.fullRows) {
             const one = buildItems({
@@ -267,7 +283,7 @@
               fullRows: st.fullRows,
               annotations,
               file: f.path,
-              expanded: st.expanded || new Set(),
+              expanded: st.expanded || new Map(),
               full: !!st.full,
               view,
             });
@@ -348,6 +364,23 @@
     while (i >= 0 && !isChangeRow(items[i])) i--;
     while (i > 0 && isChangeRow(items[i - 1])) i--;
     return i >= 0 ? i : -1;
+  }
+
+  /**
+   * Item indices where each change block in [start, end) begins, walking
+   * blocks exactly as `findChange` does. Feeds the "change 3 of 12" counter
+   * next to the prev/next arrows: the app caches this per (items, file) and
+   * counts how many starts fall at or before its anchor.
+   */
+  function changeStarts(items, start, end) {
+    const starts = [];
+    let inBlock = false;
+    for (let i = start; i < end; i++) {
+      const c = isChangeRow(items[i]);
+      if (c && !inBlock) starts.push(i);
+      inBlock = c;
+    }
+    return starts;
   }
 
   /**
@@ -522,7 +555,61 @@
     return { shown, badge: shown.length < items.length ? `${shown.length}/${items.length}` : String(items.length) };
   }
 
+  /**
+   * The commit timeline panel's whole contract, held where node can test it.
+   * `timelineRows` is what the panel shows; `timelineScope` is what a
+   * selection means. t = { base, head, sel, mode } with mode "upto" | "only".
+   *
+   * `commits` arrives newest-first (git log order — the order every git tool
+   * trains the eye for). `included` is the affordance that makes a selection's
+   * semantics visible: rows outside the current diff render dimmed, so "up to
+   * here" reads as "this commit and everything below it" at a glance.
+   */
+  function timelineRows(commits, sel, mode) {
+    const rows = [{ kind: "all", sel: !sel, included: true }];
+    const list = commits || [];
+    const si = sel ? list.findIndex((c) => c.sha === sel) : -1;
+    list.forEach((c, i) =>
+      rows.push({
+        kind: "commit",
+        sha: c.sha,
+        short: c.short,
+        subject: c.subject,
+        sel: sel === c.sha,
+        included: !sel || si < 0 || (mode === "only" ? c.sha === sel : i >= si),
+      })
+    );
+    return rows;
+  }
+
+  function timelineScope(t) {
+    if (!t.sel) return { type: "range", base: t.base, head: t.head };
+    if (t.mode === "only") return { type: "commit", sha: t.sel };
+    return { type: "range", base: t.base, head: t.sel };
+  }
+
+  /**
+   * Which commit tag an annotation should carry, or null for none. Tagged at
+   * creation, never re-tagged: an existing annotation keeps its tag whatever
+   * scope it is edited from, and a new one is tagged exactly when it is
+   * written against a single commit's diff. `meta` is that commit's metadata
+   * if already fetched; the tag degrades gracefully without it.
+   */
+  function annCommit(existing, scope, meta) {
+    if (existing) return existing.commit || null;
+    if (!scope || scope.type !== "commit") return null;
+    const m = meta && meta.sha === scope.sha ? meta : null;
+    return {
+      sha: scope.sha,
+      short: m ? m.short : String(scope.sha).slice(0, 7),
+      subject: m ? m.subject : "",
+    };
+  }
+
   exp.GEOM = GEOM;
+  exp.timelineRows = timelineRows;
+  exp.timelineScope = timelineScope;
+  exp.annCommit = annCommit;
   exp.annKey = annKey;
   exp.annIndex = annIndex;
   exp.commentLines = commentLines;
@@ -533,6 +620,7 @@
   exp.rowLine = rowLine;
   exp.rowIndexFor = rowIndexFor;
   exp.findChange = findChange;
+  exp.changeStarts = changeStarts;
   exp.focusStep = focusStep;
   exp.searchHits = searchHits;
   exp.nextUnviewed = nextUnviewed;

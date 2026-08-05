@@ -10,6 +10,7 @@
 
 <div id="topbar">
   <div class="tb-left">
+    <button id="btnSidebar" class="btn ghost" title="Toggle sidebar (b)">☰</button>
     <span id="repoName" class="repo"></span>
     <span id="branchChip" class="chip branch"></span>
     <span id="scopeChip" class="chip scope"></span>
@@ -41,16 +42,10 @@
     <div id="bottom">
       <div id="tabbar">
         <button class="tab active" data-tab="changes">Changes</button>
-        <button class="tab" data-tab="commit">Commit</button>
         <button class="tab" data-tab="tree">File Tree</button>
         <div class="tabbar-spacer"></div>
+        <div id="streamSummary" class="stream-summary" hidden></div>
         <div id="diffTools" class="diff-tools">
-          <label class="tgl viewed" title="Mark reviewed and jump to the next unviewed file (v)">
-            <input type="checkbox" id="chkViewed"> Viewed
-          </label>
-          <label class="tgl" title="Show whole file, not just the diff (f)">
-            <input type="checkbox" id="chkFull"> Full file
-          </label>
           <div class="seg">
             <button id="segSplit" class="seg-btn active">Split</button>
             <button id="segUnified" class="seg-btn">Unified</button>
@@ -70,6 +65,20 @@
             <button class="icotog" data-foldtoggle aria-label="Fold all files"></button>
           </div>
           <div id="fileTree" class="tree" tabindex="0"></div>
+          <div class="hsplit invert" id="ciSplit" data-target="commitInfo" data-min="40" hidden></div>
+          <div id="commitInfo" class="commit-info" hidden></div>
+          <div class="hsplit invert" id="tlSplit" data-target="timelinePane" hidden></div>
+          <div id="timelinePane" hidden>
+            <div class="tl-head">
+              <button id="tlCaret" class="tl-caret" title="Collapse the commits panel">▾</button>
+              <span class="tl-title">Commits <span id="tlCount" class="count"></span></span>
+              <div class="seg tiny">
+                <button id="segUpto" class="seg-btn active" title="Accumulated changes from the base through the selected commit">Up to here</button>
+                <button id="segOnly" class="seg-btn" title="Only the selected commit's changes">This commit</button>
+              </div>
+            </div>
+            <div id="timeline" class="tl-list" tabindex="0"></div>
+          </div>
         </div>
         <div class="vsplit" data-target="leftPane"></div>
         <div id="rightPane">
@@ -83,7 +92,6 @@
           </div>
           <div id="diffBody" class="vlist code" tabindex="0"><div class="vspacer"></div><div class="vrows"></div></div>
           <div id="hscroll" class="off"><div id="hscrollInner"></div></div>
-          <div id="commitDetail" class="detail" hidden></div>
         </div>
       </div>
     </div>
@@ -150,6 +158,7 @@
       <tr><td><kbd>f</kbd></td><td>full file / diff only</td></tr>
       <tr><td><kbd>v</kbd></td><td>mark viewed &amp; go to next unviewed</td></tr>
       <tr><td><kbd>t</kbd></td><td>toggle comments panel</td></tr>
+      <tr><td><kbd>b</kbd></td><td>toggle sidebar</td></tr>
       <tr><td><kbd>/</kbd></td><td>filter files</td></tr>
       <tr><td><kbd>⌘⏎</kbd></td><td>save comment / send feedback</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>close popover, dialog or filter</td></tr>
