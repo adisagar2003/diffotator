@@ -795,7 +795,10 @@ function setViewed(path, on) {
      file never clears its viewed mark — done is done until you say otherwise. */
   if (on) S.collapsed.add(k);
   changed();
-  if (on) refocusOutOf(path);
+  if (on) {
+    refocusOutOf(path); // after render: the segment lookup needs the post-fold stream
+    diffVL.refresh(); // refocusOutOf never repaints, and the moved cursor must show
+  }
 }
 
 /* Selection and collapse are per scope for the same reason viewed is, and they
@@ -1504,6 +1507,7 @@ function renderDiff() {
   if (!S.files.length) {
     head.innerHTML = "";
     head.dataset.file = "";
+    head.classList.add("ghost"); // no file to name — no empty accent strip
     S.items = [];
     S.segments = [];
     const base = S.ov && S.ov.base && S.ov.base.ref; // a tab click can land here before boot's first overview fetch resolves
@@ -1539,7 +1543,7 @@ function renderTreeFile(head) {
   // stale segments around for scrollToFile/currentSeg to trust.
   S.segments = [];
   const path = S.selFile || "";
-  head.hidden = false; // the Changes tab may have left it hidden over a collapsed top file
+  head.classList.remove("ghost"); // the Changes tab may have ghosted it over a collapsed top file
   head.dataset.file = ""; // the sticky header owns this on the other tab
   if (!path) {
     head.innerHTML = "";
@@ -1620,20 +1624,13 @@ function updateStickyHeader(force) {
   if (!seg) {
     head.innerHTML = "";
     head.dataset.file = ""; // or the next scroll back into this file would find a match and skip
+    head.classList.add("ghost"); // an empty accent strip reads as a broken one
     return;
   }
-  /* A collapsed file whose header row is itself at the top of the viewport
-     needs no sticky copy — the bar exists to restate a header that scrolled
-     off, and with nothing scrolled off it read as a duplicated first row
-     (arrows and all) whenever the stream was mostly folded. */
-  if (diffVL.topIndex() === seg.start && isCollapsed(seg.file)) {
-    head.hidden = true;
-    head.dataset.file = ""; // forces a fresh render when the bar returns
-    return;
-  }
-  head.hidden = false;
-  if (!force && head.dataset.file === seg.file) return; // cheap on every scroll tick
-  head.dataset.file = seg.file;
+  /* The selFile sync must precede the ghost branch below: v, f and both
+     highlight rails read selFile, and a scroll across a run of folded headers
+     would otherwise leave it frozen on whatever the bar last named — v would
+     mark a file the reader scrolled away from long ago. */
   if (S.selFile !== seg.file) {
     S.selFile = seg.file;
     updateTreeSel(seg.file); // incremental: scroll crossings must not rebuild the pane
@@ -1642,6 +1639,21 @@ function updateStickyHeader(force) {
        crossing by one window shift. */
     diffVL.paint(true);
   }
+  /* A collapsed file whose header row is itself at the top of the viewport
+     needs no sticky copy — the bar exists to restate a header that scrolled
+     off, and with nothing scrolled off it read as a duplicated first row
+     (arrows and all) whenever the stream was mostly folded. Ghosted via
+     visibility, not display: removing a 32px flex sibling would resize the
+     scroller on every folded-file crossing — content jump, ResizeObserver
+     repaint, and a clamp-bounce loop at the bottom of the pane. */
+  if (diffVL.topIndex() === seg.start && isCollapsed(seg.file)) {
+    head.classList.add("ghost");
+    head.dataset.file = ""; // forces a fresh render when the bar returns
+    return;
+  }
+  head.classList.remove("ghost");
+  if (!force && head.dataset.file === seg.file) return; // cheap on every scroll tick
+  head.dataset.file = seg.file;
   const f = S.files.find((x) => x.path === seg.file) || {};
   const i = S.segments.indexOf(seg);
   const collapsed = isCollapsed(seg.file);
@@ -1792,7 +1804,22 @@ $("#diffHeader").addEventListener("click", (e) => {
   const file = $("#diffHeader").dataset.file;
   if (!file || S.tab === "tree") return;
   if (e.target.closest("[data-shfold]")) return setCollapsed(file, !isCollapsed(file));
-  if (e.target.closest("[data-pviewed]")) return setViewed(file, !isViewed(file)); // folds too; v additionally advances
+  if (e.target.closest("[data-pviewed]")) {
+    /* The bar's pill folds the file the reader is INSIDE — the whole body
+       vanishes and the scroll clamp would drop them into an arbitrary later
+       file. Land on the folded header instead. (The stream rows' pill needs
+       no anchor: a visible header row keeps its position when its body goes.) */
+    const on = !isViewed(file);
+    setViewed(file, on);
+    if (on) {
+      const s = S.segments.find((x) => x.file === file);
+      if (s) {
+        diffVL.scrollToIndex(s.start, false, 0);
+        pinAfterScroll(file);
+      }
+    }
+    return;
+  }
   if (e.target.closest("[data-pfull]")) return setFull(file, !isFull(file));
   if (e.target.closest("[data-shjump]")) return scrollToFile(file);
 });
@@ -1979,6 +2006,9 @@ function setTab(tab) {
   setListMode(tab !== "tree");
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
   $("#streamSummary").hidden = tab === "tree"; // renderProgress re-shows it with fresh numbers
+  // A ghosted bar (collapsed top file on the Changes tab) must not carry over —
+  // the tree tab would have no header at all until a file is picked.
+  if (tab === "tree") $("#diffHeader").classList.remove("ghost");
   if (tab === "tree" && !S.treePaths) {
     loadTree();
     return; // loadTree renders the file list itself once paths arrive
