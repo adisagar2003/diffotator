@@ -795,7 +795,10 @@ function setViewed(path, on) {
      file never clears its viewed mark — done is done until you say otherwise. */
   if (on) S.collapsed.add(k);
   changed();
-  if (on) refocusOutOf(path);
+  if (on) {
+    refocusOutOf(path); // after render: the segment lookup needs the post-fold stream
+    diffVL.refresh(); // refocusOutOf never repaints, and the moved cursor must show
+  }
 }
 
 /* Selection and collapse are per scope for the same reason viewed is, and they
@@ -1504,6 +1507,7 @@ function renderDiff() {
   if (!S.files.length) {
     head.innerHTML = "";
     head.dataset.file = "";
+    head.classList.add("ghost"); // no file to name — no empty accent strip
     S.items = [];
     S.segments = [];
     const base = S.ov && S.ov.base && S.ov.base.ref; // a tab click can land here before boot's first overview fetch resolves
@@ -1539,7 +1543,7 @@ function renderTreeFile(head) {
   // stale segments around for scrollToFile/currentSeg to trust.
   S.segments = [];
   const path = S.selFile || "";
-  head.hidden = false; // the Changes tab may have left it hidden over a collapsed top file
+  head.classList.remove("ghost"); // the Changes tab may have ghosted it over a collapsed top file
   head.dataset.file = ""; // the sticky header owns this on the other tab
   if (!path) {
     head.innerHTML = "";
@@ -1620,20 +1624,13 @@ function updateStickyHeader(force) {
   if (!seg) {
     head.innerHTML = "";
     head.dataset.file = ""; // or the next scroll back into this file would find a match and skip
+    head.classList.add("ghost"); // an empty accent strip reads as a broken one
     return;
   }
-  /* A collapsed file whose header row is itself at the top of the viewport
-     needs no sticky copy — the bar exists to restate a header that scrolled
-     off, and with nothing scrolled off it read as a duplicated first row
-     (arrows and all) whenever the stream was mostly folded. */
-  if (diffVL.topIndex() === seg.start && isCollapsed(seg.file)) {
-    head.hidden = true;
-    head.dataset.file = ""; // forces a fresh render when the bar returns
-    return;
-  }
-  head.hidden = false;
-  if (!force && head.dataset.file === seg.file) return; // cheap on every scroll tick
-  head.dataset.file = seg.file;
+  /* The selFile sync must precede the ghost branch below: v, f and both
+     highlight rails read selFile, and a scroll across a run of folded headers
+     would otherwise leave it frozen on whatever the bar last named — v would
+     mark a file the reader scrolled away from long ago. */
   if (S.selFile !== seg.file) {
     S.selFile = seg.file;
     updateTreeSel(seg.file); // incremental: scroll crossings must not rebuild the pane
@@ -1642,6 +1639,21 @@ function updateStickyHeader(force) {
        crossing by one window shift. */
     diffVL.paint(true);
   }
+  /* A collapsed file whose header row is itself at the top of the viewport
+     needs no sticky copy — the bar exists to restate a header that scrolled
+     off, and with nothing scrolled off it read as a duplicated first row
+     (arrows and all) whenever the stream was mostly folded. Ghosted via
+     visibility, not display: removing a 32px flex sibling would resize the
+     scroller on every folded-file crossing — content jump, ResizeObserver
+     repaint, and a clamp-bounce loop at the bottom of the pane. */
+  if (diffVL.topIndex() === seg.start && isCollapsed(seg.file)) {
+    head.classList.add("ghost");
+    head.dataset.file = ""; // forces a fresh render when the bar returns
+    return;
+  }
+  head.classList.remove("ghost");
+  if (!force && head.dataset.file === seg.file) return; // cheap on every scroll tick
+  head.dataset.file = seg.file;
   const f = S.files.find((x) => x.path === seg.file) || {};
   const i = S.segments.indexOf(seg);
   const collapsed = isCollapsed(seg.file);
@@ -1792,7 +1804,22 @@ $("#diffHeader").addEventListener("click", (e) => {
   const file = $("#diffHeader").dataset.file;
   if (!file || S.tab === "tree") return;
   if (e.target.closest("[data-shfold]")) return setCollapsed(file, !isCollapsed(file));
-  if (e.target.closest("[data-pviewed]")) return setViewed(file, !isViewed(file)); // folds too; v additionally advances
+  if (e.target.closest("[data-pviewed]")) {
+    /* The bar's pill folds the file the reader is INSIDE — the whole body
+       vanishes and the scroll clamp would drop them into an arbitrary later
+       file. Land on the folded header instead. (The stream rows' pill needs
+       no anchor: a visible header row keeps its position when its body goes.) */
+    const on = !isViewed(file);
+    setViewed(file, on);
+    if (on) {
+      const s = S.segments.find((x) => x.file === file);
+      if (s) {
+        diffVL.scrollToIndex(s.start, false, 0);
+        pinAfterScroll(file);
+      }
+    }
+    return;
+  }
   if (e.target.closest("[data-pfull]")) return setFull(file, !isFull(file));
   if (e.target.closest("[data-shjump]")) return scrollToFile(file);
 });
@@ -1980,9 +2007,20 @@ function setTab(tab) {
   setListMode(tab !== "tree");
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
   $("#streamSummary").hidden = tab === "tree"; // renderProgress re-shows it with fresh numbers
-  if (tab === "tree" && !S.treePaths) {
-    loadTree();
-    return; // loadTree renders the file list itself once paths arrive
+  if (tab === "tree") {
+    // Neither branch below re-renders the header, so whatever the Changes tab
+    // left in it — a filename and live pills for a file this tab isn't showing
+    // — would sit there until the first tree click. Blank it: the bare strip
+    // is renderTreeFile's own no-file-picked state. Unghost too, or a
+    // collapsed top file would leave the tree tab with no header at all.
+    const head = $("#diffHeader");
+    head.classList.remove("ghost");
+    head.innerHTML = "";
+    head.dataset.file = "";
+    if (!S.treePaths) {
+      loadTree();
+      return; // loadTree renders the file list itself once paths arrive
+    }
   }
   renderFileTree();
   // Leaving the File Tree tab's one-file view behind in #diffBody until the next
@@ -2066,50 +2104,9 @@ function setFullOnCurrent(on) {
 /* Drafts live on the server, not in localStorage: localStorage is keyed to the
    origin including the port, and every run binds a new random port, so drafts
    written by one session were invisible to the next. */
-/*
- * UI preferences: the same disk-over-localStorage reasoning, but global — a
- * pane width is a fact about your screen, not the repository. One store, one
- * seam: anything the UI wants remembered goes through these two calls; the
- * server holds a flat JSON object and never interprets the keys.
- */
-const Prefs = {
-  data: {},
-  pending: {}, // only what THIS session changed — the server merges key-level,
-  // so a concurrent session's settings are never clobbered by our snapshot
-  timer: null,
-  async load() {
-    let disk = {};
-    try {
-      disk = (await api("prefs")) || {};
-    } catch {
-      /* defaults are always an acceptable answer */
-    }
-    /* Merge under, never replace: the ☰ button and the splitters are live
-       while this request is in flight, and a click in that window has already
-       written into `data`. Replacing would invert memory against disk — the
-       click's value POSTs, but memory holds the disk value, so the reader's
-       next toggle no-ops on the equality guard and the wrong state sticks. */
-    this.data = { ...disk, ...this.data };
-  },
-  get(key, dflt) {
-    return key in this.data ? this.data[key] : dflt;
-  },
-  set(key, value) {
-    if (this.data[key] === value) return;
-    this.data[key] = value;
-    this.pending[key] = value;
-    clearTimeout(this.timer);
-    this.timer = setTimeout(() => {
-      const patch = this.pending;
-      this.pending = {};
-      fetch("/api/prefs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      }).catch(() => {}); // lost prefs must never take the review down
-    }, 250);
-  },
-};
+/* The preference store itself lives in web/prefs.js (window.Prefs) — one
+   source of truth for settings, per review. Below is only the DOM glue that
+   applies stored panel geometry to this page. */
 
 /* Panel geometry restores by splitter target id; the splitter's mouseup is the
    single writer, so a size that was never touched is never stored. */
