@@ -650,6 +650,11 @@ assert.ok(
   assert.strictEqual(K.shortcut({ key: "c", metaKey: true }), null, "⌘C copies, it does not comment");
   assert.strictEqual(K.shortcut({ key: "f", ctrlKey: true }), null);
   assert.strictEqual(K.shortcut({ key: "v", altKey: true }), null);
+  /* The assertions below match the text of app.js, because the wiring they
+     protect only exists in a file that needs a document to run. That makes them
+     brittle to reformatting on purpose: if one fails after a change that altered
+     no behaviour, re-pin the pattern — deleting it removes the only thing holding
+     the fix in place. */
   // One preventDefault for whatever the table owns, rather than one case
   // remembering and the next forgetting.
   assert.match(
@@ -687,7 +692,13 @@ assert.ok(
     ["closeHelp", "closeModal", "closePopover", "closeSearch"],
     "one named close per dismissal, so there is one place to get this right"
   );
-  for (const [body, name] of closers) assert.match(body, /restoreFocus\(\)/, `${name} hands focus back`);
+  /* …and hands it back to the pane it read *first*. Hiding a focused element
+     blurs it, so a closer that asks afterwards is asking about `<body>` and only
+     lands right through curPane()'s fallback. */
+  for (const [body, name] of closers) {
+    assert.match(body, /const pane = curPane\(\);/, `${name} reads the pane before hiding anything`);
+    assert.match(body, /restoreFocus\(pane\)/, `${name} hands focus back to it`);
+  }
   assert.ok(
     !/return \(\$\("#(modal|helpSheet)"\)\.hidden = true\)/.test(app),
     "no dismissal hides an overlay out from under the reader's focus"
@@ -907,6 +918,7 @@ async function gitFidelity() {
   const ROCKET = "rocket 🚀.md";
   put(ROCKET, "hi\n");
   put("crlf.txt", "one\r\ntwo\r\nthree\r\n");
+  put("uniform.txt", "alpha\r\nbravo\r\ncharlie\r\n");
   put("nonl.txt", "no trailing newline here");
   put("mode.txt", "unchanged\n");
   g("add", "-A");
@@ -914,6 +926,7 @@ async function gitFidelity() {
 
   put(ROCKET, "hi\nthere\n");
   put("crlf.txt", "one\ntwo\nthree\n");
+  put("uniform.txt", "alpha\r\nBRAVO CHANGED\r\ncharlie\r\n"); // still CRLF: only the text moved
   put("nonl.txt", "no trailing newline here\nsecond line still no newline");
   fs.chmodSync(path.join(d, "mode.txt"), 0o755);
 
@@ -937,6 +950,17 @@ async function gitFidelity() {
   assert.deepStrictEqual(dels.map((r) => r.s), adds.map((r) => r.s), "both sides read the same text…");
   assert.ok(dels.every((r) => r.cr), "…so the old side has to say it was CRLF");
   assert.ok(adds.every((r) => !r.cr), "…and the new side has to say it is not");
+
+  /* …but a file that is CRLF throughout has not changed its line endings, and
+     marking every row of it — context included, on both sides of a split — is
+     noise standing exactly where the signal goes. Every Windows repo is this
+     case, so getting it wrong costs more readability than the fix bought. */
+  const uni = await G.fileDiff(root, wt, "uniform.txt");
+  assert.ok(
+    uni.rows.some((r) => r.t === "add"),
+    "the edit is still a diff"
+  );
+  assert.ok(uni.rows.every((r) => !r.cr), "a uniformly-CRLF file badges nothing");
 
   // "\ No newline at end of file" is git describing the row above it; dropped,
   // an added final newline reads as a deletion and addition of the same text.
