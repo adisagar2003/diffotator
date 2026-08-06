@@ -2376,6 +2376,9 @@ function confirmDiscard() {
   $("#modalSub").textContent =
     "Closing sends nothing to the agent. Use “Send feedback” if you want these delivered.";
   $("#modalConfirm").textContent = "Discard and close";
+  // Only openModal clears this, so a disabled Send modal opened earlier would
+  // leave the discard button dead — and ⌘⏎ now honours it.
+  $("#modalConfirm").disabled = false;
   $("#modalConfirm").classList.add("danger-btn");
   $("#modalSummary").hidden = true;
   $("#modalList").innerHTML = "";
@@ -2522,7 +2525,9 @@ document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
     e.preventDefault();
     if (!$("#popover").hidden) savePopover();
-    else if (!$("#modal").hidden) submit(pendingDecision);
+    // A peer of the Send button, not a way around it: the modal has already
+    // decided whether this submit is allowed, and said so on screen.
+    else if (!$("#modal").hidden) { if (!$("#modalConfirm").disabled) submit(pendingDecision); }
     else openModal("annotated");
     return;
   }

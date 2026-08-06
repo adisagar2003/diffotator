@@ -14,6 +14,19 @@ const { render } = require("./src/feedback");
 // --- feedback rendering ----------------------------------------------------
 assert.strictEqual(render({ decision: "approved", annotations: [] }), "The user approved.");
 assert.strictEqual(render({ decision: "dismissed" }), "Review session closed without feedback.");
+/* An empty review is not feedback. Rendered as one, the agent is handed
+   "0 comments" wrapped in "address every comment above" — told a review
+   happened and asked to act on nothing. */
+assert.strictEqual(render({ decision: "annotated", annotations: [] }), "", "no comments, no summary, nothing to send");
+assert.strictEqual(
+  render({ decision: "annotated", annotations: [], summary: "   \n " }),
+  "",
+  "whitespace is not a summary"
+);
+assert.ok(
+  render({ decision: "annotated", annotations: [], summary: "ship it" }).includes("ship it"),
+  "a summary on its own is still feedback"
+);
 {
   const out = render({
     decision: "annotated",
@@ -1011,6 +1024,48 @@ async function draftsAndHook() {
   put("a.ts", "const a = 2;\n");
   assert.strictEqual((await at({}, { minFiles: 3 })).verdict, "allow", "a one-file turn is below threshold");
   assert.match((await at({}, { minFiles: 3 })).why, /below-threshold/);
+
+  /* --- the threshold is read from the environment, so it is a trust boundary.
+     `Math.max(1, NaN)` is NaN, and `files.length < NaN` is false for every
+     count: a typo in a shell profile used to delete the threshold rather than
+     clamp it, and open a review on every turn that touched anything. */
+  const said = [];
+  const write = process.stderr.write.bind(process.stderr);
+  const minFilesFor = (v) => {
+    if (v === undefined) delete process.env.DIFFOTATOR_HOOK_MIN_FILES;
+    else process.env.DIFFOTATOR_HOOK_MIN_FILES = v;
+    return H.config().minFiles;
+  };
+  process.stderr.write = (s) => (said.push(String(s)), true);
+  try {
+    assert.strictEqual(minFilesFor("3"), 3);
+    assert.strictEqual(minFilesFor("1"), 1);
+    assert.strictEqual(minFilesFor("2.7"), 2.7);
+    assert.strictEqual(minFilesFor("0"), 1, "zero clamps to one file, not to none");
+    assert.strictEqual(minFilesFor("-5"), 1, "negatives clamp too");
+    assert.strictEqual(minFilesFor(""), 3, "empty means the default");
+    assert.strictEqual(minFilesFor(undefined), 3, "unset means the default");
+    assert.strictEqual(said.length, 0, "a value we can read is not worth a word");
+
+    assert.strictEqual(minFilesFor("abc"), 3, "a value we cannot read falls back to the default");
+    assert.strictEqual(minFilesFor("Infinity"), 3, "…as does one no repository can reach");
+    /* The getter reports the unreadable value; it does not announce it. Warning
+       from inside config() said the same thing again on every call, `hook
+       --install` among them. */
+    assert.strictEqual(said.length, 0, "reading the config is not what talks");
+    process.env.DIFFOTATOR_HOOK_MIN_FILES = "abc";
+    assert.strictEqual(H.config().badMinFiles, "abc", "…but the value it could not read is reported");
+    assert.strictEqual(H.config().minFiles, 3, "…alongside what it used instead");
+
+    // What all of that is for: one changed file, a typo'd threshold, no opts
+    // override — the gate must still hold, and say why out loud.
+    assert.match((await at({})).why, /below-threshold\(1<3\)/, "a typo does not remove the threshold");
+    assert.match(said.join(""), /DIFFOTATOR_HOOK_MIN_FILES=abc/, "the turn names the setting it ignored");
+    assert.strictEqual(said.length, 1, "once for the turn that used it, not once per lookup");
+  } finally {
+    process.stderr.write = write;
+    delete process.env.DIFFOTATOR_HOOK_MIN_FILES;
+  }
 
   put("b.ts", "const b = 1;\n");
   put("c.ts", "const c = 1;\n");
