@@ -127,6 +127,10 @@ const ROUTES = {
     full: await G.fileContent(root, scope, q.get("file")),
   }),
 
+  "GET /api/blame": async ({ root, scope, q }) => ({
+    blame: await G.blameLine(root, scope, q.get("file"), q.get("line")),
+  }),
+
   "GET /api/tree": async ({ root, scope }) => ({ paths: await G.tree(root, scope) }),
 
   "POST /api/submit": async ({ root, body, submit }) => {

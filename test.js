@@ -784,6 +784,7 @@ fs.writeFileSync(path.join(dir, "new.txt"), "hello\n");
   fs.rmSync(dir, { recursive: true, force: true });
   await awkwardShapes();
   await gitFidelity();
+  await blameALine();
   await draftsAndHook();
   await scopeKinds();
   await brokenAndEmptyRepos();
@@ -883,6 +884,43 @@ async function awkwardShapes() {
    endings, the missing final newline, the file mode, and which revision a
    detached worktree is actually on. A reviewer who cannot see them is being
    shown a change that reads as no change. */
+/* Blame is context under a comment box: it must answer, and when it cannot it
+   must say nothing rather than say something wrong. */
+async function blameALine() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-blame-"));
+  const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "pipe" }).toString();
+  g("init", "-q", "-b", "main");
+  g("config", "user.email", "old@t.t");
+  g("config", "user.name", "Older Self");
+  fs.writeFileSync(path.join(d, "a.js"), "first\nsecond\n");
+  g("add", "-A");
+  g("commit", "-qm", "the line that stayed");
+  const sha = g("rev-parse", "HEAD").trim();
+  fs.writeFileSync(path.join(d, "a.js"), "first\nsecond\nthird\n");
+
+  const root = await G.repoRoot(d);
+  const wt = { type: "worktree" };
+
+  const kept = await G.blameLine(root, wt, "a.js", 1);
+  assert.strictEqual(kept.sha, sha.slice(0, 8), "a committed line names its commit");
+  assert.strictEqual(kept.author, "Older Self");
+  assert.strictEqual(kept.summary, "the line that stayed");
+  assert.ok(kept.time > 0, "…with a timestamp to render");
+
+  // The worktree scope blames the working tree, so an unsaved line says so
+  // instead of naming whoever happens to hold that line number in HEAD.
+  const fresh = await G.blameLine(root, wt, "a.js", 3);
+  assert.strictEqual(fresh.sha, null, "an uncommitted line has no commit to name");
+  assert.strictEqual(fresh.summary, "not committed yet");
+
+  // A commit scope blames that commit, where line 3 does not exist yet.
+  assert.strictEqual(await G.blameLine(root, { type: "commit", sha }, "a.js", 3), null);
+  assert.strictEqual(await G.blameLine(root, wt, "a.js", 0), null, "a bad line number is a missing chip");
+  assert.strictEqual(await G.blameLine(root, wt, "nope.js", 1), null, "…and so is a file git will not blame");
+
+  fs.rmSync(d, { recursive: true, force: true });
+}
+
 async function gitFidelity() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-fidelity-"));
   const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "pipe" }).toString();

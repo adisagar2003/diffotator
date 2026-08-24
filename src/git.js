@@ -436,6 +436,47 @@ async function fileDiff(root, scope, file, context = 1000000) {
   return parsed;
 }
 
+/**
+ * Who last touched one line, for the "after" side of a scope.
+ *
+ * Reviewing a change means asking "and who wrote what it replaced?" often
+ * enough that leaving the terminal for it is the reason nobody asks. Blame is
+ * per-line and lazy — one `-L n,n` call when a comment popover opens, never a
+ * pass over the file.
+ *
+ * The worktree scope blames the working tree itself (no rev): a line you just
+ * edited honestly reports itself uncommitted, which is more useful than
+ * blaming whatever HEAD happens to have at that line number.
+ *
+ * Absence is a legitimate answer here — a line git will not blame (a boundary
+ * commit, a file only in the index, a bad line number) is a missing chip, not
+ * a failed review — so this probes rather than throws.
+ */
+async function blameLine(root, scope, file, line) {
+  const n = Math.floor(Number(line));
+  if (!n || n < 1) return null;
+  const args = ["blame", "--porcelain", "-L", `${n},${n}`];
+  if (!Scope.isWorktree(scope)) args.push(Scope.rev(scope));
+  const out = await probe(root, [...args, "--", file]);
+  const head = /^([0-9a-f]{40})\b/.exec(out);
+  if (!head) return null;
+  const field = (k) => {
+    const m = new RegExp("^" + k + " (.*)$", "m").exec(out);
+    return m ? m[1].trim() : "";
+  };
+  const time = +field("author-time") || 0;
+  /* All-zero sha is git's own name for "not committed yet". Saying so beats
+     showing eight zeros and a 1970 timestamp. */
+  const sha = head[1];
+  const uncommitted = /^0+$/.test(sha);
+  return {
+    sha: uncommitted ? null : sha.slice(0, 8),
+    author: uncommitted ? null : field("author"),
+    time: uncommitted ? 0 : time,
+    summary: uncommitted ? "not committed yet" : field("summary"),
+  };
+}
+
 /** Whole-file content at a scope's "after" side — for reviewing untouched files. */
 async function fileContent(root, scope, file) {
   let text = null;
@@ -498,6 +539,7 @@ module.exports = {
   changedFiles,
   fileDiff,
   fileContent,
+  blameLine,
   tree,
   detectBase,
 };
