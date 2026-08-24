@@ -463,6 +463,14 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
   font:11.5px/1.5 var(--mono);background:var(--bg);border:1px solid var(--border-soft);border-radius:5px;
   padding:4px 7px;margin-bottom:8px;white-space:pre;overflow:auto;max-height:56px;color:var(--text-dim)
 }
+/* Blame sits under the quoted line, in the register of a caption: it is
+   context for the comment, never a thing to read first. */
+.pop-blame{
+  display:flex;align-items:baseline;gap:7px;margin:-4px 0 8px;padding:0 2px;
+  font-size:11px;color:var(--muted);font-family:var(--ui);min-height:15px
+}
+.pop-blame .bsha{font:10.5px var(--mono);color:var(--accent)}
+.pop-blame .bsum{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .labels{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
 .labels button{
   border:1px solid var(--border);background:transparent;border-radius:11px;padding:1px 9px;

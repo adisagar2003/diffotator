@@ -2181,6 +2181,8 @@ function openPopover(anchor, file, side, line) {
   $("#popAddSug").hidden = !$("#popSug").hidden;
   $("#popDelete").hidden = !existing;
 
+  loadBlame(file, side, line);
+
   const pop = $("#popover");
   pop.hidden = false;
   const r = anchor.getBoundingClientRect();
@@ -2192,6 +2194,38 @@ function openPopover(anchor, file, side, line) {
   pop.style.top = top + "px";
   $("#popBody").focus();
   renderDiff();
+}
+
+/* Who last touched the line being commented on. Old-side lines are skipped:
+   their numbers are only valid in the *before* image, and blaming the after
+   revision at that number names an unrelated line with total confidence.
+
+   The fetch races the reader — a popover can be closed and another opened
+   before it lands — so the answer is dropped unless it is still the answer to
+   what is on screen. A blame that fails is a hidden chip, not an error: it is
+   context, and the comment box works fine without it. */
+let blameSeq = 0;
+async function loadBlame(file, side, line) {
+  const el = $("#popBlame");
+  el.hidden = true;
+  el.innerHTML = "";
+  if (side !== "new") return;
+  const seq = ++blameSeq;
+  const asked = { file, side, line };
+  let blame;
+  try {
+    ({ blame } = await api("blame", { ...scopeParams(), file, line }, { cached: true }));
+  } catch {
+    return;
+  }
+  const p = S.popFor;
+  if (seq !== blameSeq || !p || p.file !== asked.file || p.side !== asked.side || p.line !== asked.line) return;
+  if (!blame) return;
+  el.innerHTML = blame.sha
+    ? `<span class="bsha">${esc(blame.sha)}</span><span>${esc(blame.author)}</span>` +
+      `<span>${esc(relTime(blame.time * 1000))}</span><span class="bsum">${esc(blame.summary)}</span>`
+    : `<span class="bsum">not committed yet</span>`;
+  el.hidden = false;
 }
 
 function closePopover() {
