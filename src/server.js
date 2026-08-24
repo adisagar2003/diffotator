@@ -116,7 +116,7 @@ const ROUTES = {
   "GET /api/diff": async ({ root, scope, q }) => {
     const file = q.get("file");
     const [diff, full] = await Promise.all([
-      G.fileDiff(root, scope, file),
+      G.fileDiff(root, scope, file, undefined, q.get("ws") === "1"),
       q.get("full") === "1" ? G.fileContent(root, scope, file) : Promise.resolve(null),
     ]);
     return { file, diff, full };

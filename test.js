@@ -784,6 +784,7 @@ fs.writeFileSync(path.join(dir, "new.txt"), "hello\n");
   fs.rmSync(dir, { recursive: true, force: true });
   await awkwardShapes();
   await gitFidelity();
+  await whitespaceOnly();
   await draftsAndHook();
   await scopeKinds();
   await brokenAndEmptyRepos();
@@ -883,6 +884,43 @@ async function awkwardShapes() {
    endings, the missing final newline, the file mode, and which revision a
    detached worktree is actually on. A reviewer who cannot see them is being
    shown a change that reads as no change. */
+/* `-w` has one interesting failure: a tracked file whose only change is
+   whitespace diffs to nothing under it, which looks exactly like an untracked
+   file — and untracked files get synthesised as an all-add of the whole file.
+   Getting that wrong turns "nothing changed" into "everything is new". */
+async function whitespaceOnly() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-ws-"));
+  const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "pipe" }).toString();
+  g("init", "-q", "-b", "main");
+  g("config", "user.email", "t@t.t");
+  g("config", "user.name", "T");
+  fs.writeFileSync(path.join(d, "re.js"), "function f() {\nreturn 1;\n}\n");
+  g("add", "-A");
+  g("commit", "-qm", "root");
+  fs.writeFileSync(path.join(d, "re.js"), "function f() {\n  return 1;\n}\n");
+  fs.writeFileSync(path.join(d, "fresh.txt"), "brand new\n");
+
+  const root = await G.repoRoot(d);
+  const wt = { type: "worktree" };
+
+  const plain = await G.fileDiff(root, wt, "re.js");
+  assert.ok(
+    plain.rows.some((r) => r.t === "add") && plain.rows.some((r) => r.t === "del"),
+    "the reindent is a real diff when whitespace counts"
+  );
+
+  const ignored = await G.fileDiff(root, wt, "re.js", undefined, true);
+  assert.deepStrictEqual(ignored.rows, [], "…and no diff at all when it does not");
+  assert.ok(ignored.empty, "an ignored-away diff reports itself empty, not binary or broken");
+
+  // The regression the guard above exists for.
+  const untracked = await G.fileDiff(root, wt, "fresh.txt", undefined, true);
+  assert.strictEqual(untracked.rows.length, 1, "an untracked file still renders under -w");
+  assert.strictEqual(untracked.rows[0].t, "add");
+
+  fs.rmSync(d, { recursive: true, force: true });
+}
+
 async function gitFidelity() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-fidelity-"));
   const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "pipe" }).toString();
