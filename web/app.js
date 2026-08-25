@@ -1830,6 +1830,20 @@ function jumpChange(dir) {
   updateChangeCounter(); // a clamped jump moves no pixels, so no scroll event fires
 }
 
+/* Walking the comments themselves. `n`/`p` walk changes — how a review is read
+   the first time; this is the second pass, over what you already said, to
+   check it still makes sense before sending. */
+function jumpComment(dir) {
+  const from = lastJumpIdx() >= 0 ? lastJumpIdx() : diffVL.topIndex();
+  const i = RM.findComment(S.items, from, dir);
+  if (i < 0) return;
+  diffVL.scrollToIndex(i, true);
+  const a = S.items[i].a;
+  lastJump = { top: $("#diffBody").scrollTop, file: S.items[i].f, side: a.side, line: a.line };
+  pinAfterScroll(S.items[i].f);
+  updateChangeCounter();
+}
+
 /* Windowing means only ~60 rows exist in the DOM, so the browser's own Find
    cannot see the file. Search has to be ours. */
 function runSearch(q, jump = true) {
@@ -2582,6 +2596,12 @@ document.addEventListener("keydown", (e) => {
       break;
     case "p":
       jumpChange(-1);
+      break;
+    case "]":
+      jumpComment(1);
+      break;
+    case "[":
+      jumpComment(-1);
       break;
     case "s":
       setView(S.view === "split" ? "unified" : "split");

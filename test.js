@@ -289,6 +289,32 @@ assert.ok(
   assert.strictEqual(RM.computeGraph([{ sha: "A", parents: [] }]).maxLanes, 1, "a lone commit needs one lane");
 }
 
+// --- walking the comments ---------------------------------------------------
+{
+  const items = [
+    { k: "fileHeader", f: "a.js" },
+    { k: "row" },
+    { k: "comment", a: { id: "1" }, f: "a.js" },
+    { k: "row" },
+    { k: "fileHeader", f: "b.js" },
+    { k: "comment", a: { id: "2" }, f: "b.js" },
+  ];
+  assert.strictEqual(RM.findComment(items, 0, 1), 2, "forwards from the top finds the first");
+  assert.strictEqual(RM.findComment(items, 2, 1), 5, "…then the next, across a file boundary");
+  assert.strictEqual(RM.findComment(items, 5, -1), 2);
+  // Small, finite set: running off the end and stopping is worse than coming
+  // back round.
+  assert.strictEqual(RM.findComment(items, 5, 1), 2, "forwards past the last wraps to the first");
+  assert.strictEqual(RM.findComment(items, 0, -1), 5, "backwards before the first wraps to the last");
+  // A jump that does not move is worse than no jump: with one comment, the
+  // only answer from on top of it is itself.
+  const one = [{ k: "row" }, { k: "comment", a: { id: "1" } }];
+  assert.strictEqual(RM.findComment(one, 0, 1), 1);
+  assert.strictEqual(RM.findComment(one, 1, 1), 1, "one comment answers itself rather than nothing");
+  assert.strictEqual(RM.findComment([{ k: "row" }, { k: "fileHeader" }], 0, 1), -1, "nothing to visit");
+  assert.strictEqual(RM.findComment([], 0, -1), -1);
+}
+
 /* --- sidebar ---------------------------------------------------------------
    What the sidebar claims: one highlighted row wherever you are, and badges
    that agree with the rows underneath them. Both were HTML strings in app.js,
