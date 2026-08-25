@@ -68,6 +68,7 @@ const S = {
   loadingMore: false,
   commitsDone: false,
   tl: null, // commit timeline: { base, head, commits, sel, mode } while the scope family is a range
+  context: RM.GEOM.context, // unmodified lines kept either side of a change
   commitMeta: null, // banner metadata for the current commit scope; tags comments with their commit
 };
 
@@ -1276,6 +1277,7 @@ function buildItems() {
     annotations: S.ann,
     view: S.view,
     viewedSet: new Set(S.files.map((f) => f.path).filter(isViewed)),
+    context: S.context,
   });
   S.items = out.items;
   S.segments = out.segments;
@@ -2024,6 +2026,30 @@ function toggleSidebar() {
 }
 $("#btnSidebar").onclick = toggleSidebar;
 
+/* Three lines of context is right for reading a change and wrong for judging
+   one — "is this early return safe?" is a question about the eight lines above
+   it, and answering it meant clicking a fold open in every file, every time.
+
+   No refetch: the diff already arrives with full context, so this only changes
+   how much of it is folded away. Which is also why it is a stream setting and
+   not a request parameter. */
+$("#segContext").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-ctx]");
+  if (b) setContext(+b.dataset.ctx);
+});
+/* `quiet` is the restore path: applyPanelPrefs runs before the first fetch, so
+   there is no stream to rebuild and no pref worth writing back. */
+function setContext(n, quiet) {
+  S.context = n;
+  for (const b of $("#segContext").querySelectorAll("[data-ctx]")) b.classList.toggle("active", +b.dataset.ctx === n);
+  if (quiet) return;
+  Prefs.set("diff.context", n);
+  /* Folds the reader opened by hand described the old fold layout; keeping
+     them would re-reveal a run that is no longer where it was. */
+  for (const st of S.perFile.values()) if (st.expanded) st.expanded.clear();
+  rebuildStream();
+}
+
 $("#segSplit").onclick = () => setView("split");
 $("#segUnified").onclick = () => setView("unified");
 function setView(v) {
@@ -2120,6 +2146,10 @@ function applyPanelPrefs() {
     if (v) document.getElementById(id).style[dim] = v + "px";
   }
   if (Prefs.get("panel.sidebarOff") && !$("#sidebar").classList.contains("off")) toggleSidebar();
+  const ctx = +Prefs.get("diff.context");
+  // Only a value the control actually offers: a stale or hand-edited pref must
+  // not leave every button unlit and the stream folded to something unnamed.
+  if ([3, 8, 20].includes(ctx)) setContext(ctx, true);
 }
 
 let draftTimer = null;

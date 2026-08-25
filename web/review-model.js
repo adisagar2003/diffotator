@@ -225,7 +225,16 @@
    * and note rows are fixed — so the windowed list's prefix-sum index is exact
    * before, during and after the per-file diffs arrive.
    */
-  function buildStream({ files, selected, collapsed, perFile, annotations = [], view = "split", viewedSet = new Set() }) {
+  function buildStream({
+    files,
+    selected,
+    collapsed,
+    perFile,
+    annotations = [],
+    view = "split",
+    viewedSet = new Set(),
+    context = GEOM.context,
+  }) {
     const items = [];
     const segments = [];
     let maxLineLen = 0;
@@ -275,7 +284,11 @@
             .map(([id, ex]) => `${id}:${ex.head || 0}+${ex.tail || 0}`)
             .sort()
             .join(",");
-          const key = view + "|" + !!st.full + "|" + foldKey + "|" + JSON.stringify(annsForFile);
+          /* Context is part of the memo key, not just the call: it changes
+             which rows are folded away, and a body cached under the old
+             setting is a stream that ignores the control. */
+          const key =
+            view + "|" + !!st.full + "|" + context + "|" + foldKey + "|" + JSON.stringify(annsForFile);
           let memo = st.stream;
           if (!memo || st.streamKey !== key || memo.rows !== st.rows || memo.fullRows !== st.fullRows) {
             const one = buildItems({
@@ -286,6 +299,7 @@
               expanded: st.expanded || new Map(),
               full: !!st.full,
               view,
+              context,
             });
             // Rows carry their segment's view so a pure-add file stays unified
             // while its neighbor renders split — exactly the per-file rule
