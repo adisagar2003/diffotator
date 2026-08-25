@@ -51,16 +51,25 @@ function render({ annotations = [], summary = "", decision = "annotated", scope,
   }
 
   for (const [file, list] of byFile) {
+    // A comment about the file itself has no line, sorts to the top of its
+    // file, and is the one an agent should read before the line-by-line notes.
     list.sort((a, b) => (a.line || 0) - (b.line || 0));
     out.push("");
     out.push(`## \`${file}\``);
     for (const a of list) {
       const label = LABELS.includes(a.label) ? a.label : "comment";
-      const loc =
-        a.endLine && a.endLine !== a.line ? `L${a.line}-L${a.endLine}` : `L${a.line}`;
-      const side = a.side === "old" ? " (old side)" : "";
+      /* `line == null` is a comment about the file as a whole — "this module
+         should not exist", "these tests belong next to the code". Rendering it
+         as `file:null` and `Lnull` was the reason the UI could not offer one. */
+      const whole = a.line == null;
+      const loc = whole
+        ? "the whole file"
+        : a.endLine && a.endLine !== a.line
+        ? `L${a.line}-L${a.endLine}`
+        : `L${a.line}`;
+      const side = whole || a.side !== "old" ? "" : " (old side)";
       out.push("");
-      out.push(`### ${file}:${a.line} — ${label}${a.blocking ? " (blocking)" : ""}`);
+      out.push(`### ${file}${whole ? "" : ":" + a.line} — ${label}${a.blocking ? " (blocking)" : ""}`);
       out.push("");
       // A comment written against one commit's diff says so: the line anchor
       // belongs to that diff, and the sha tells the agent which layer to fix

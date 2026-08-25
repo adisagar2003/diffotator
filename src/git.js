@@ -412,7 +412,7 @@ function parseUnifiedDiff(text) {
   return out;
 }
 
-async function fileDiff(root, scope, file, context = 1000000) {
+async function fileDiff(root, scope, file, context = 1000000, ignoreWs = false) {
   const sargs = await scopeArgs(root, scope);
   // `--numstat` reports binaries as `-  -` and costs one cheap call, which is
   // far better than streaming a megabyte of unified diff to discover the same.
@@ -422,14 +422,23 @@ async function fileDiff(root, scope, file, context = 1000000) {
   const changed = (+stat[0] || 0) + (+stat[1] || 0);
   if (changed > MAX_DIFF_LINES) return { rows: [], tooBig: true, changed };
 
-  const args = ["diff", "--no-color", "--no-ext-diff", `-U${context}`, "-M", ...sargs, "--", file];
+  /* `-w` goes on the diff only, never on the --numstat guard above: the guard
+     exists to refuse a megabyte of diff before we stream it, and a file whose
+     reindent is huge is still huge to produce. */
+  const args = ["diff", "--no-color", "--no-ext-diff", `-U${context}`, "-M"];
+  if (ignoreWs) args.push("-w");
+  args.push(...sargs, "--", file);
   let text = "";
   try {
     text = await git(root, args);
   } catch (e) {
     return { rows: [], binary: false, error: e.message };
   }
-  if (!text.trim() && Scope.isWorktree(scope)) {
+  /* `!changed` is what says "untracked", not the empty diff text: under `-w` a
+     tracked file whose only change is whitespace also diffs to nothing, and
+     without this guard it would be re-rendered as an all-add of the whole file
+     — the loudest possible way to say "nothing changed here". */
+  if (!text.trim() && !changed && Scope.isWorktree(scope)) {
     // untracked file: synthesise an all-add diff
     const abs = path.join(root, file);
     if (fs.existsSync(abs)) {

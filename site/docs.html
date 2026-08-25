@@ -188,7 +188,7 @@ Reviews open when a turn leaves 3+ changed files.</code></pre>
     <p>Built for the case where an agent just touched fifty files:</p>
     <ol>
       <li>Read the file. <kbd>n</kbd> and <kbd>p</kbd> jump between changes inside it.</li>
-      <li>Something wrong? <kbd>c</kbd> on the focused line, or click any line number.</li>
+      <li>Something wrong? <kbd>c</kbd> on the focused line, or click any line number. For something wrong with the <em>file</em> — it should not exist, it belongs elsewhere — use the 🗨 pill on the file&rsquo;s header row.</li>
       <li><kbd>v</kbd> marks the file viewed and jumps to the next unviewed one.</li>
       <li>Repeat until the progress bar reads <code>56/56</code>.</li>
       <li><b>Send feedback</b>, or <b>Approve</b> if there's nothing to say.</li>
@@ -266,8 +266,9 @@ Reviews open when a turn leaves 3+ changed files.</code></pre>
           <tr><td><kbd>v</kbd></td><td>Mark viewed, jump to next unviewed</td></tr>
           <tr><td><kbd>s</kbd></td><td>Split / unified</td></tr>
           <tr><td><kbd>f</kbd></td><td>Full file / diff only</td></tr>
+          <tr><td><kbd>w</kbd></td><td>Ignore whitespace-only changes</td></tr>
           <tr><td><kbd>t</kbd></td><td>Comments panel</td></tr>
-          <tr><td><kbd>/</kbd></td><td>Filter the file list</td></tr>
+          <tr><td><kbd>/</kbd></td><td>Filter the file list — a path substring, or <code>unviewed</code> / <code>commented</code> / <code>added</code> / <code>deleted</code> / <code>modified</code> / <code>renamed</code> / <code>untracked</code> / <code>binary</code> / <code>hidden</code>; <code>!</code> negates, terms are ANDed</td></tr>
           <tr><td><kbd>⌘F</kbd></td><td>Find in the current file</td></tr>
           <tr><td><kbd>⌘↵</kbd></td><td>Save comment, or send the review</td></tr>
           <tr><td><kbd>Esc</kbd></td><td>Close the popover, search or dialog</td></tr>
