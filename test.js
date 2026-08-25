@@ -1482,6 +1482,33 @@ async function httpSurface() {
   assert.strictEqual(await status("/keys.js"), 200, "…and the keyboard policy it shares with the page");
   assert.strictEqual(await status("/%2e%2e%2fpackage.json"), 404, "static serving stays inside web/");
 
+  /* Preview renders exactly what Send would, and — the whole point — leaves
+     the session alone: nothing submitted, no draft cleared. */
+  const post = (path, payload) =>
+    json(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  const review = {
+    decision: "annotated",
+    // Deliberately not the summary the real submit below sends: if preview
+    // ever resolved the session promise, that assertion would read this back.
+    summary: "draft only, never sent",
+    scope: { type: "worktree" },
+    annotations: [{ file: "a.ts", side: "new", line: 1, label: "issue", blocking: true, body: "null deref" }],
+  };
+  const preview = (await post("/api/preview", review)).markdown;
+  assert.ok(preview.includes("null deref") && preview.includes("1 blocking comment"));
+  assert.ok(preview.includes("draft only, never sent"));
+  assert.ok(preview.includes("working tree vs HEAD"), "one renderer, so the scope label is the same one");
+  assert.strictEqual(
+    (await post("/api/preview", { decision: "annotated", annotations: [], summary: "" })).markdown,
+    "",
+    "nothing written renders to nothing — the button has something to refuse"
+  );
+  assert.strictEqual(await status("/api/preview"), 404, "…and it is a POST, like every other mutation-shaped route");
+
   // Submitting resolves the session promise; the server never touches teardown.
   assert.deepStrictEqual(
     await json("/api/submit", {

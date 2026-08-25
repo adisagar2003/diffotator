@@ -2478,6 +2478,37 @@ $("#modalSummary").addEventListener("input", () => {
 $("#btnSend").onclick = () => openModal("annotated");
 $("#btnApprove").onclick = () => openModal("approved");
 $("#modalCancel").onclick = closeModal;
+/* A review is often worth more than one place — the agent acts on it, and the
+   same words belong in the PR a human will read. Rendered by the server, by
+   the one renderer that produces what the agent gets, so the pasted version
+   cannot drift into being a second opinion of the review. */
+$("#modalCopy").onclick = async (e) => {
+  const btn = e.currentTarget;
+  const say = (msg) => {
+    btn.textContent = msg;
+    setTimeout(() => (btn.textContent = "Copy markdown"), 1600);
+  };
+  try {
+    const r = await fetch("/api/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        decision: pendingDecision,
+        summary: $("#modalSummary").value,
+        annotations: pendingDecision === "dismissed" ? [] : S.ann,
+        scope: S.scope,
+      }),
+    });
+    const { markdown } = await r.json();
+    if (!markdown) return say("Nothing to copy");
+    await navigator.clipboard.writeText(markdown);
+    say("Copied ✓");
+  } catch {
+    // Nothing was sent and nothing was lost; the modal is still open and Send
+    // still works. Saying so beats a silent no-op.
+    say("Copy failed");
+  }
+};
 $("#modalConfirm").onclick = () => submit(pendingDecision);
 $("#btnClose").onclick = () => {
   if (S.ann.length && !confirmDiscard()) return;
