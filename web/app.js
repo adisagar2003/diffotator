@@ -69,6 +69,7 @@ const S = {
   commitsDone: false,
   tl: null, // commit timeline: { base, head, commits, sel, mode } while the scope family is a range
   commitMeta: null, // banner metadata for the current commit scope; tags comments with their commit
+  ignoreWs: false, // `git diff -w`: a reindent should not read as a rewrite
 };
 
 // ---------------------------------------------------------------------------
@@ -1060,7 +1061,10 @@ $("#fileFilter").addEventListener("input", (e) => {
     store+rebuild; a scope change mid-flight discards the arrival. */
 async function loadFileDiff(path) {
   const sid = scopeId();
-  const params = { ...scopeParams(), file: path };
+  /* `ws` is part of the request url, so the request cache keys on it too: a
+     file already fetched one way is re-fetched the other way, and toggling
+     back is free. */
+  const params = { ...scopeParams(), file: path, ws: S.ignoreWs ? "1" : "0" };
   try {
     /* No `full: "1"` here. The diff already arrives with full context, so
        "Full file" only has to stop folding — asking for the whole file as
@@ -2025,6 +2029,21 @@ function toggleSidebar() {
 }
 $("#btnSidebar").onclick = toggleSidebar;
 
+/* Whitespace is a property of the diff, not of how it is drawn, so this one
+   throws away the loaded rows and refetches. Viewed marks, folds and comments
+   are untouched — they are keyed by file and line, not by this. */
+$("#segWs").onclick = () => setIgnoreWs(!S.ignoreWs);
+function setIgnoreWs(on) {
+  if (S.ignoreWs === on) return;
+  S.ignoreWs = on;
+  $("#segWs").classList.toggle("active", on);
+  Prefs.set("diff.ignoreWs", on);
+  for (const st of S.perFile.values()) st.loaded = false;
+  S.perFile.clear();
+  rebuildStream();
+  fetchStream();
+}
+
 $("#segSplit").onclick = () => setView("split");
 $("#segUnified").onclick = () => setView("unified");
 function setView(v) {
@@ -2121,6 +2140,10 @@ function applyPanelPrefs() {
     if (v) document.getElementById(id).style[dim] = v + "px";
   }
   if (Prefs.get("panel.sidebarOff") && !$("#sidebar").classList.contains("off")) toggleSidebar();
+  /* Set before the first fetch, not through setIgnoreWs: there is nothing
+     loaded yet to throw away, and the refetch would race the boot one. */
+  S.ignoreWs = !!Prefs.get("diff.ignoreWs");
+  $("#segWs").classList.toggle("active", S.ignoreWs);
 }
 
 let draftTimer = null;
@@ -2614,6 +2637,9 @@ document.addEventListener("keydown", (e) => {
       break;
     case "f":
       setFullOnCurrent(!isFull(S.selFile));
+      break;
+    case "w":
+      setIgnoreWs(!S.ignoreWs);
       break;
     case "v":
       toggleViewed(!isViewed(S.selFile));
