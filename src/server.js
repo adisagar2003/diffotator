@@ -129,6 +129,14 @@ const ROUTES = {
 
   "GET /api/tree": async ({ root, scope }) => ({ paths: await G.tree(root, scope) }),
 
+  /* The same markdown the agent would get, without sending it or clearing the
+     draft. One renderer, so what you paste into a PR is not a second, drifting
+     rendering of the review. */
+  "POST /api/preview": async ({ root, body }) => {
+    const payload = await body();
+    return { markdown: render({ ...payload, repo: path.basename(root) }) };
+  },
+
   "POST /api/submit": async ({ root, body, submit }) => {
     const payload = await body();
     submit({
