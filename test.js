@@ -319,6 +319,31 @@ assert.ok(
   assert.strictEqual(RM.sideGroup([]).badge, "0");
 }
 
+// --- focus containment in the dialogs ---------------------------------------
+{
+  const Keys = require("./web/keys");
+  const src = fs.readFileSync(path.join(__dirname, "web", "app.js"), "utf8");
+  // A helper with the right answer is no use if app.js does not apply it.
+  assert.ok(/Keys\.tabTarget\(/.test(src), "the Tab handler goes through the shared policy");
+  assert.ok(/aria-modal/.test(fs.readFileSync(path.join(__dirname, "web", "index.html"), "utf8")),
+    "…and the dialogs announce themselves as dialogs");
+
+  // None of the overlays has a backdrop, so Tab used to walk out of an open
+  // dialog and into the page behind it — where the reader cannot see what they
+  // are typing into, and the popover still holds an unsaved comment.
+  assert.strictEqual(Keys.tabTarget(4, 0, false), 1);
+  assert.strictEqual(Keys.tabTarget(4, 3, false), 0, "forwards off the end comes back to the first");
+  assert.strictEqual(Keys.tabTarget(4, 0, true), 3, "…and backwards past the first goes to the last");
+  assert.strictEqual(Keys.tabTarget(4, 2, true), 1);
+  // Focus outside the overlay entirely: it never entered, or something stole it.
+  assert.strictEqual(Keys.tabTarget(4, -1, false), 0);
+  assert.strictEqual(Keys.tabTarget(4, -1, true), 3);
+  // An overlay with nothing focusable must fall through rather than trap the
+  // key and leave Tab dead.
+  assert.strictEqual(Keys.tabTarget(0, -1, false), -1);
+  assert.strictEqual(Keys.tabTarget(1, 0, false), 0, "one control cycles to itself");
+}
+
 // --- buildStream: many files, one windowed list ----------------------------
 {
   const ctx = (i) => ({ t: "ctx", o: i, n: i, s: "line" + i });

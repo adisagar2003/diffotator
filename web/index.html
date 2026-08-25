@@ -10,7 +10,7 @@
 
 <div id="topbar">
   <div class="tb-left">
-    <button id="btnSidebar" class="btn ghost" title="Toggle sidebar (b)">☰</button>
+    <button id="btnSidebar" class="btn ghost" title="Toggle sidebar (b)" aria-label="Toggle sidebar">☰</button>
     <span id="repoName" class="repo"></span>
     <span id="branchChip" class="chip branch"></span>
     <span id="scopeChip" class="chip scope"></span>
@@ -20,7 +20,7 @@
     <button id="btnComments" class="btn ghost" title="Toggle comments panel (t)">
       <span class="ico">🗨</span> Comments <span id="cmtCount" class="count">0</span>
     </button>
-    <button id="btnHelp" class="btn ghost" title="Keyboard shortcuts (?)">?</button>
+    <button id="btnHelp" class="btn ghost" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
     <button id="btnClose" class="btn">Close</button>
     <button id="btnApprove" class="btn ok">✓ Approve</button>
     <button id="btnSend" class="btn primary">Send feedback</button>
@@ -85,10 +85,10 @@
           <div id="diffHeader" class="diff-header"></div>
           <div id="searchBar" class="searchbar" hidden>
             <input id="searchInput" placeholder="Find in file…" spellcheck="false">
-            <span id="searchCount" class="scount"></span>
-            <button id="searchPrev" title="Previous (⇧⏎)">▲</button>
-            <button id="searchNext" title="Next (⏎)">▼</button>
-            <button id="searchClose" title="Close (Esc)">✕</button>
+            <span id="searchCount" class="scount" role="status" aria-live="polite"></span>
+            <button id="searchPrev" title="Previous (⇧⏎)" aria-label="Previous match">▲</button>
+            <button id="searchNext" title="Next (⏎)" aria-label="Next match">▼</button>
+            <button id="searchClose" title="Close (Esc)" aria-label="Close find bar">✕</button>
           </div>
           <div id="diffBody" class="vlist code" tabindex="0"><div class="vspacer"></div><div class="vrows"></div></div>
           <div id="hscroll" class="off"><div id="hscrollInner"></div></div>
@@ -104,10 +104,10 @@
 </div>
 
 <!-- annotation popover -->
-<div id="popover" class="popover" hidden>
+<div id="popover" class="popover" role="dialog" aria-modal="true" aria-labelledby="popTitle" hidden>
   <div class="pop-head">
     <span id="popTitle">Line</span>
-    <button id="popClose" class="x">✕</button>
+    <button id="popClose" class="x" aria-label="Close without saving">✕</button>
   </div>
   <div id="popCode" class="pop-code"></div>
   <div id="popLabels" class="labels"></div>
@@ -123,7 +123,7 @@
 </div>
 
 <!-- submit modal -->
-<div id="modal" class="modal" hidden>
+<div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" hidden>
   <div class="modal-card">
     <h2 id="modalTitle">Send feedback</h2>
     <p id="modalSub" class="sub"></p>
@@ -136,7 +136,7 @@
   </div>
 </div>
 
-<div id="done" class="done" hidden>
+<div id="done" class="done" role="status" aria-live="polite" hidden>
   <div class="done-card">
     <div id="doneIcon" class="done-icon">✓</div>
     <h2 id="doneTitle">Feedback sent</h2>
@@ -144,9 +144,9 @@
   </div>
 </div>
 
-<div id="helpSheet" class="modal" hidden>
+<div id="helpSheet" class="modal" role="dialog" aria-modal="true" aria-labelledby="helpTitle" hidden>
   <div class="modal-card small">
-    <h2>Shortcuts</h2>
+    <h2 id="helpTitle">Shortcuts</h2>
     <table class="keys">
       <tr><td><kbd>⌃h</kbd> <kbd>⌃j</kbd> <kbd>⌃k</kbd> <kbd>⌃l</kbd></td><td>move between panes (⌃ + arrows too)</td></tr>
       <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous file</td></tr>
