@@ -533,13 +533,19 @@
    * the reader last chose — a commit is reached *from* a row and owns none of
    * its own, so it leaves this alone and the row it came from stays lit.
    */
-  function sideRows({ row, localCount, base }) {
+  function sideRows({ row, localCount, stagedCount, base }) {
     const rows = [{ row: "Local Changes", act: "scope-worktree", ico: "📝", label: "Local Changes" }];
+    rows.push({ row: "Staged", act: "scope-staged", ico: "📥", label: "Staged" });
     if (base) rows.push({ row: "Branch", act: "scope-range", ico: "⑂", label: `vs ${base}` });
     rows.push({ row: "All Commits", act: "scope-all", ico: "≡", label: "All Commits" });
     return rows.map((r) => ({
       ...r,
-      badge: r.act === "scope-worktree" && localCount != null ? String(localCount) : "",
+      badge:
+        r.act === "scope-worktree" && localCount != null
+          ? String(localCount)
+          : r.act === "scope-staged" && stagedCount != null
+          ? String(stagedCount)
+          : "",
       active: r.row === row,
     }));
   }

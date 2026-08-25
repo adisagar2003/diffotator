@@ -294,22 +294,31 @@ assert.ok(
    that agree with the rows underneath them. Both were HTML strings in app.js,
    so both drifted from the truth with nothing to catch it. */
 {
-  const rows = (row, localCount) => RM.sideRows({ row, localCount, base: "origin/main" });
+  const rows = (row, localCount, stagedCount) =>
+    RM.sideRows({ row, localCount, stagedCount, base: "origin/main" });
   // The count is the working tree's, not the open scope's: 6 local changes are
   // still 6 while you are reading a commit.
   assert.deepStrictEqual(
     rows("All Commits", 6).map((r) => r.badge),
-    ["6", "", ""],
+    ["6", "", "", ""],
     "leaving the worktree scope does not empty its badge"
   );
+  // Staged is counted on exactly the same terms, and stays blank rather than
+  // claiming zero when nobody has counted it yet.
+  assert.deepStrictEqual(
+    rows("Staged", 6, 2).map((r) => r.badge),
+    ["6", "2", "", ""]
+  );
+  assert.strictEqual(rows("Staged", 6).find((r) => r.act === "scope-staged").badge, "");
+  assert.strictEqual(rows("Staged", 6, 0).find((r) => r.act === "scope-staged").badge, "0");
   assert.strictEqual(rows("All Commits", 0).find((r) => r.act === "scope-worktree").badge, "0");
   // Every row name the app stores lights exactly one row — including while a
   // commit is open, which keeps the row it was reached from.
-  for (const row of ["Local Changes", "Branch", "All Commits"]) {
+  for (const row of ["Local Changes", "Staged", "Branch", "All Commits"]) {
     const lit = rows(row, 3).filter((r) => r.active);
     assert.deepStrictEqual(lit.map((r) => r.row), [row], `${row} highlights its own row`);
   }
-  assert.strictEqual(RM.sideRows({ row: "Local Changes", localCount: 1 }).length, 2, "no base ref, no branch row");
+  assert.strictEqual(RM.sideRows({ row: "Local Changes", localCount: 1 }).length, 3, "no base ref, no branch row");
 
   const many = Array.from({ length: 305 }, (_, i) => ({ name: "b" + i }));
   assert.strictEqual(RM.sideGroup(many, 300).shown.length, 300, "long lists stay capped");
@@ -806,6 +815,7 @@ fs.writeFileSync(path.join(dir, "new.txt"), "hello\n");
   assert.deepStrictEqual(cf.map((f) => f.path).sort(), ["a.js", "new.txt"]);
 
   fs.rmSync(dir, { recursive: true, force: true });
+  await stagedScope();
   await awkwardShapes();
   await gitFidelity();
   await draftsAndHook();
@@ -907,6 +917,54 @@ async function awkwardShapes() {
    endings, the missing final newline, the file mode, and which revision a
    detached worktree is actually on. A reviewer who cannot see them is being
    shown a change that reads as no change. */
+/* The staged scope is what `git commit` would record right now. The two halves
+   of a partially staged tree have to stay apart, or the scope is just the
+   worktree with extra steps. */
+async function stagedScope() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-staged-"));
+  const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "pipe" }).toString();
+  g("init", "-q", "-b", "main");
+  g("config", "user.email", "t@t.t");
+  g("config", "user.name", "T");
+  fs.writeFileSync(path.join(d, "in.js"), "one\n");
+  fs.writeFileSync(path.join(d, "out.js"), "one\n");
+  g("add", "-A");
+  g("commit", "-qm", "root");
+
+  fs.writeFileSync(path.join(d, "in.js"), "one\ntwo\n");
+  g("add", "in.js"); // staged
+  fs.writeFileSync(path.join(d, "out.js"), "one\ntwo\n"); // not staged
+  fs.writeFileSync(path.join(d, "fresh.txt"), "hello\n"); // never added
+
+  const root = await G.repoRoot(d);
+  const staged = { type: "staged" };
+
+  assert.deepStrictEqual(
+    (await G.changedFiles(root, staged)).map((f) => f.path),
+    ["in.js"],
+    "only what is in the index — an untracked file is by definition not staged"
+  );
+  assert.deepStrictEqual(
+    (await G.changedFiles(root, { type: "worktree" })).map((f) => f.path).sort(),
+    ["fresh.txt", "in.js", "out.js"],
+    "…while the worktree scope still shows the lot"
+  );
+
+  const diff = await G.fileDiff(root, staged, "in.js");
+  assert.deepStrictEqual(
+    diff.rows.filter((r) => r.t === "add").map((r) => r.s),
+    ["two"],
+    "the staged diff is the index against HEAD"
+  );
+  assert.strictEqual((await G.overview(root)).stagedCount, 1, "the sidebar badge has a number before anyone clicks");
+
+  // Staging further work moves the count; nothing caches it.
+  g("add", "out.js");
+  assert.strictEqual((await G.overview(root)).stagedCount, 2);
+
+  fs.rmSync(d, { recursive: true, force: true });
+}
+
 async function gitFidelity() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-fidelity-"));
   const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "pipe" }).toString();
@@ -1132,6 +1190,7 @@ async function scopeKinds() {
   // A sample per kind. Adding a kind without one fails here, which is the point.
   const SAMPLES = {
     worktree: { type: "worktree" },
+    staged: { type: "staged" },
     commit: { type: "commit", sha: "deadbeefdeadbeefdeadbeef" },
     range: { type: "range", base: "origin/main", head: "HEAD" },
   };
@@ -1154,6 +1213,11 @@ async function scopeKinds() {
   assert.deepStrictEqual(Scope.parse(""), { type: "worktree" });
   assert.strictEqual(Scope.isWorktree(Scope.parse(null)), true);
   assert.strictEqual(Scope.isWorktree(SAMPLES.commit), false);
+  // Staged is not a worktree scope: `isWorktree` gates untracked files and the
+  // index, and an untracked file is by definition not staged.
+  assert.strictEqual(Scope.isWorktree(SAMPLES.staged), false);
+  assert.strictEqual(Scope.encode(SAMPLES.staged), "staged");
+  assert.strictEqual(Scope.label(SAMPLES.staged), "staged vs HEAD");
   assert.throws(() => Scope.parse("wat:1"), /unknown scope/, "an unknown kind is refused, not guessed");
   assert.throws(() => Scope.parse("range:main"), /invalid range/, "a range needs both endpoints");
   assert.throws(() => Scope.parse("commit:"), /invalid sha/);
