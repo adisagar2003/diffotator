@@ -35,12 +35,53 @@
 
   const annKey = (file, side, line) => `${file}|${side}|${line}`;
 
-  /** file|side|line → how many comments sit there, for the gutter badges. */
+  /**
+   * A comment's line span, normalised. `endLine` arrives from a click-drag, so
+   * it can be below the anchor, equal to it, or absent — the rest of the app
+   * should never have to care which. A one-line comment reports `to === from`
+   * and, crucially, stores no `endLine` at all (see `annEnd`), so nothing that
+   * already exists in a draft has to be migrated.
+   */
+  function annSpan(a) {
+    const from = +((a && a.line) || 0);
+    const raw = a && a.endLine != null ? +a.endLine : from;
+    const to = Number.isFinite(raw) ? raw : from;
+    return { from: Math.min(from, to), to: Math.max(from, to) };
+  }
+
+  /** What to persist for a span: nothing at all when it is a single line. */
+  function annEnd(line, endLine) {
+    const { from, to } = annSpan({ line, endLine });
+    return { line: from, endLine: to > from ? to : null };
+  }
+
+  /** How the span reads on a card, in the panel, in the send dialog. */
+  function annLoc(a) {
+    const { from, to } = annSpan(a);
+    return to > from ? `L${from}-${to}` : `L${from}`;
+  }
+
+  /** Is this line inside the comment's span? Clicking any line of a range
+      edits that range rather than starting a second comment on top of it. */
+  function annCovers(a, file, side, line) {
+    if (!a || a.file !== file || a.side !== side) return false;
+    const { from, to } = annSpan(a);
+    return line >= from && line <= to;
+  }
+
+  /** file|side|line → how many comments sit there, for the gutter badges.
+      Every line of a range is badged: a range whose middle looks untouched is
+      a range nobody can see. */
   function annIndex(annotations) {
     const m = new Map();
     for (const a of annotations || []) {
-      const k = annKey(a.file, a.side, a.line);
-      m.set(k, (m.get(k) || 0) + 1);
+      const { from, to } = annSpan(a);
+      // A pathological endLine must not walk a million keys.
+      const last = Math.min(to, from + 500);
+      for (let n = from; n <= last; n++) {
+        const k = annKey(a.file, a.side, n);
+        m.set(k, (m.get(k) || 0) + 1);
+      }
     }
     return m;
   }
@@ -612,6 +653,10 @@
   exp.annCommit = annCommit;
   exp.annKey = annKey;
   exp.annIndex = annIndex;
+  exp.annSpan = annSpan;
+  exp.annEnd = annEnd;
+  exp.annLoc = annLoc;
+  exp.annCovers = annCovers;
   exp.commentLines = commentLines;
   exp.itemHeight = itemHeight;
   exp.toSplit = toSplit;

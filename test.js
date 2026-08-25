@@ -136,6 +136,52 @@ assert.ok(
   delete global.window;
 }
 
+// --- comment spans ----------------------------------------------------------
+{
+  const one = { id: "1", file: "a.js", side: "new", line: 12 };
+  const span = { id: "2", file: "a.js", side: "new", line: 12, endLine: 18 };
+
+  assert.deepStrictEqual(RM.annSpan(one), { from: 12, to: 12 }, "no endLine is a one-line span");
+  assert.deepStrictEqual(RM.annSpan(span), { from: 12, to: 18 });
+  // A drag upward hands over an endLine below the anchor; nothing downstream
+  // should have to know which direction the mouse went.
+  assert.deepStrictEqual(RM.annSpan({ line: 18, endLine: 12 }), { from: 12, to: 18 });
+  assert.deepStrictEqual(RM.annSpan({ line: 5, endLine: "nope" }), { from: 5, to: 5 });
+
+  // A single line stores no endLine at all, so a draft written before ranges
+  // existed is already in the new shape.
+  assert.deepStrictEqual(RM.annEnd(12, 12), { line: 12, endLine: null });
+  assert.deepStrictEqual(RM.annEnd(12, null), { line: 12, endLine: null });
+  assert.deepStrictEqual(RM.annEnd(18, 12), { line: 12, endLine: 18 }, "the anchor becomes the lower end");
+
+  assert.strictEqual(RM.annLoc(one), "L12");
+  assert.strictEqual(RM.annLoc(span), "L12-18");
+
+  // Clicking any line of a range reopens that range rather than starting a
+  // second comment on top of the first.
+  assert.ok(RM.annCovers(span, "a.js", "new", 15));
+  assert.ok(RM.annCovers(span, "a.js", "new", 18), "the end is inside its own span");
+  assert.ok(!RM.annCovers(span, "a.js", "new", 19));
+  assert.ok(!RM.annCovers(span, "a.js", "old", 15), "the two sides are different images of the file");
+  assert.ok(!RM.annCovers(span, "b.js", "new", 15));
+
+  // Every line of a range is badged: a range whose middle looks untouched is
+  // a range nobody can see.
+  const idx = RM.annIndex([span, one]);
+  assert.strictEqual(idx.get(RM.annKey("a.js", "new", 12)), 2, "the anchor carries both comments");
+  assert.strictEqual(idx.get(RM.annKey("a.js", "new", 15)), 1);
+  assert.strictEqual(idx.get(RM.annKey("a.js", "new", 19)), undefined);
+  // A pathological endLine must not walk a million keys.
+  assert.ok(RM.annIndex([{ file: "a.js", side: "new", line: 1, endLine: 9e6 }]).size <= 501);
+
+  // The card still renders once, under the line the span starts at — not once
+  // per line it covers.
+  const spanRows = [];
+  for (let n = 10; n <= 20; n++) spanRows.push({ t: "ctx", o: n, n, s: "line" + n });
+  const built = RM.buildItems({ rows: spanRows, file: "a.js", view: "unified", annotations: [span], full: true });
+  assert.strictEqual(built.items.filter((i) => i.k === "comment").length, 1, "one comment, one card");
+}
+
 /* --- review model ----------------------------------------------------------
    Fold placement, split pairing, comment threading, cursor arithmetic and the
    height estimates the windowed list indexes by. All of this used to be inline

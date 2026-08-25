@@ -1344,7 +1344,7 @@ const ROW_HTML = {
     return `<div class="cmtcard" style="top:${top}px;height:${RM.itemHeight(item, charsPerComment())}px" data-cid="${a.id}">
       <div class="cc-head">
         <span class="lbl-pill${a.blocking ? " blocking" : ""}">${esc(a.label)}${a.blocking ? " · blocking" : ""}</span>
-        <span class="cc-loc">${a.side === "old" ? "old " : ""}L${a.line}</span>
+        <span class="cc-loc">${a.side === "old" ? "old " : ""}${RM.annLoc(a)}</span>
         <span class="grow"></span>
         <button class="cc-act" data-edit="${a.id}">edit</button>
         <button class="cc-act" data-del="${a.id}">delete</button>
@@ -1764,13 +1764,22 @@ $("#diffBody").addEventListener("click", (e) => {
   const edit = e.target.closest("[data-edit]");
   if (edit) {
     const a = S.ann.find((x) => x.id === edit.dataset.edit);
-    if (a) openPopover(edit, a.file, a.side, a.line);
+    if (a) openPopover(edit, a.file, a.side, a.line, a.endLine);
     return;
   }
   const gut = e.target.closest(".gut[data-line]");
   if (gut) {
     // The gutter names its own file: line numbers repeat down the stream.
-    openPopover(gut, gut.dataset.file, gut.dataset.side, +gut.dataset.line);
+    const file = gut.dataset.file;
+    const side = gut.dataset.side;
+    const line = +gut.dataset.line;
+    /* Shift-click extends from wherever the cursor already is — the same
+       gesture a file list, an editor and a spreadsheet use, so there is
+       nothing to learn. It only extends within one file and one side; the
+       other side's line numbers describe a different image of the file, and a
+       span across the two would mean nothing to the agent. */
+    const from = e.shiftKey && S.focus && S.focus.file === file && S.focus.side === side ? S.focus.line : line;
+    openPopover(gut, file, side, Math.min(from, line), Math.max(from, line));
     return;
   }
   if (e.target.closest("[data-finish-send]")) return openModal("annotated");
@@ -2159,18 +2168,46 @@ function lineText(file, side, line) {
   return "";
 }
 
-function openPopover(anchor, file, side, line) {
-  const existing = S.ann.find((a) => a.file === file && a.side === side && a.line === line);
+/* The quoted code in the popover, for one line or a span of them. Capped:
+   the box scrolls, but a 900-line accidental drag should not be carried in
+   every draft write and every submit payload. */
+function spanText(file, side, from, to) {
+  const out = [];
+  for (let n = from; n <= to && out.length < 60; n++) out.push(lineText(file, side, n));
+  if (to - from + 1 > out.length) out.push("…");
+  return out.join("\n");
+}
+
+function openPopover(anchor, file, side, line, endLine) {
+  /* Any line of a range reopens that range: a click in the middle of a span
+     used to start a second comment on top of the first, which is how you end
+     up sending the agent two overlapping opinions of the same block. */
+  const existing = S.ann.find((a) => RM.annCovers(a, file, side, line));
+  if (existing && endLine == null) {
+    // Reopening, not re-anchoring: the span you get back is the one you wrote.
+    const sp = RM.annSpan(existing);
+    line = sp.from;
+    endLine = sp.to;
+  }
+  const span = RM.annEnd(line, endLine);
   /* The scope is snapshotted now, not read at save: the popover has no
      backdrop, so the reader can switch scope (a timeline click is a normal
      "which commit did this?" move) with a draft open — and the comment's line
      anchor belongs to the diff it was opened against, so its tag must too. */
-  S.popFor = { file, side, line, id: existing ? existing.id : null, scope: S.scope, meta: S.commitMeta };
+  S.popFor = {
+    file,
+    side,
+    line: span.line,
+    endLine: span.endLine,
+    id: existing ? existing.id : null,
+    scope: S.scope,
+    meta: S.commitMeta,
+  };
   S.popLabel = existing ? existing.label : "suggestion";
-  S.focus = { file, side, line };
+  S.focus = { file, side, line: span.line };
 
-  $("#popTitle").textContent = `Line ${line}`;
-  $("#popCode").textContent = existing ? existing.code || "" : lineText(file, side, line);
+  $("#popTitle").textContent = span.endLine ? `Lines ${span.line}–${span.endLine}` : `Line ${span.line}`;
+  $("#popCode").textContent = existing ? existing.code || "" : spanText(file, side, span.line, span.endLine || span.line);
   $("#popLabels").innerHTML = LABELS.map(
     (l) => `<button data-l="${l}" class="${l === S.popLabel ? "on" : ""}">${l}</button>`
   ).join("");
@@ -2234,6 +2271,7 @@ function savePopover() {
     file: p.file,
     side: p.side,
     line: p.line,
+    endLine: p.endLine,
     label: S.popLabel,
     blocking: $("#popBlocking").checked,
     body,
@@ -2287,7 +2325,7 @@ function renderComments() {
     S.ann
       .map(
         (a) => `<div class="cp-item" data-id="${a.id}">
-        <div class="loc">${esc(a.file)}:${a.line}</div>
+        <div class="loc">${esc(a.file)}:${RM.annLoc(a).slice(1)}</div>
         <div><span class="lbl-pill${a.blocking ? " blocking" : ""}">${a.label}${a.blocking ? " · blocking" : ""}</span></div>
         <div class="bd">${esc(a.body)}</div></div>`
       )
@@ -2348,7 +2386,7 @@ function openModal(decision) {
   $("#modalList").innerHTML = S.ann
     .map(
       (a) =>
-        `<div class="mi"><div class="loc">${esc(a.file)}:${a.line}</div>
+        `<div class="mi"><div class="loc">${esc(a.file)}:${RM.annLoc(a).slice(1)}</div>
           <span class="lbl-pill${a.blocking ? " blocking" : ""}">${a.label}</span> ${esc(a.body.slice(0, 160))}</div>`
     )
     .join("");
