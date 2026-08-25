@@ -1762,8 +1762,7 @@ $("#diffBody").addEventListener("click", (e) => {
   }
   const del = e.target.closest("[data-del]");
   if (del) {
-    S.ann = S.ann.filter((a) => a.id !== del.dataset.del);
-    changed();
+    deleteAnn(del.dataset.del);
     return;
   }
   const edit = e.target.closest("[data-edit]");
@@ -2264,10 +2263,55 @@ $("#popAddSug").onclick = () => {
 };
 $("#popDelete").onclick = () => {
   if (!S.popFor || !S.popFor.id) return;
-  S.ann = S.ann.filter((a) => a.id !== S.popFor.id);
-  changed();
+  deleteAnn(S.popFor.id);
   closePopover();
 };
+
+/* Deleting a comment throws away unsent work, and there is no dialog in the
+   way — by design, because a confirm on every delete is worse than the
+   accident it prevents. So the accident is made cheap instead: one deletion is
+   held aside, and a toast says so until it is undone or replaced.
+
+   Every delete goes through here. There were two call sites, each with its own
+   copy of the filter, and an undo bolted onto one of them would have been an
+   undo the reader could not predict. */
+let undone = null;
+let toastTimer = null;
+function deleteAnn(id) {
+  const i = S.ann.findIndex((a) => a.id === id);
+  if (i < 0) return;
+  undone = { a: S.ann[i], i };
+  S.ann.splice(i, 1);
+  changed();
+  toast(`Comment on ${undone.a.file.split("/").pop()} deleted.`);
+}
+
+function undoDelete() {
+  if (!undone) return;
+  // Back where it was, not appended — the rule lives in RM so node test.js
+  // can hold it.
+  S.ann = RM.insertAt(S.ann, undone.a, undone.i);
+  undone = null;
+  hideToast();
+  changed();
+}
+
+function toast(text) {
+  $("#toastText").textContent = text;
+  $("#toast").hidden = false;
+  clearTimeout(toastTimer);
+  /* Ten seconds, then the offer expires with the toast — an Undo that is no
+     longer on screen must not still be live under ⌘Z. */
+  toastTimer = setTimeout(() => {
+    undone = null;
+    hideToast();
+  }, 10000);
+}
+function hideToast() {
+  clearTimeout(toastTimer);
+  $("#toast").hidden = true;
+}
+$("#toastUndo").onclick = undoDelete;
 $("#popSave").onclick = savePopover;
 function savePopover() {
   const p = S.popFor;
@@ -2600,6 +2644,14 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (typing) return;
+  /* After the `typing` guard, deliberately: inside a comment box ⌘Z is the
+     browser's own undo, and taking that away to restore a different comment
+     would be the more surprising of the two. */
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && !e.shiftKey && undone) {
+    e.preventDefault();
+    undoDelete();
+    return;
+  }
   // Not before the `typing` guard: ctrl+h/k are macOS text-editing bindings and
   // comment textareas need them more than pane switching does.
   if (e.ctrlKey && !e.metaKey && !e.altKey && PANE_DIR[e.key]) {

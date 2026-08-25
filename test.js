@@ -136,6 +136,22 @@ assert.ok(
   delete global.window;
 }
 
+// --- undoing a deleted comment ---------------------------------------------
+{
+  const [a, b, c] = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const list = [a, b, c];
+  // The comments panel and the send dialog are ordered by this list: a comment
+  // that comes back at the end reads as a second accident, not a fix.
+  assert.deepStrictEqual(RM.insertAt([a, c], b, 1), [a, b, c], "the middle one goes back in the middle");
+  assert.deepStrictEqual(RM.insertAt([b, c], a, 0), [a, b, c]);
+  assert.deepStrictEqual(RM.insertAt([a, b], c, 2), [a, b, c]);
+  // The list moves on while a toast is up — other comments can be written or
+  // deleted before the undo lands — so the index has to be survivable.
+  assert.deepStrictEqual(RM.insertAt([a], c, 7), [a, c], "an index past the end lands at the end");
+  assert.deepStrictEqual(RM.insertAt([], a, -3), [a]);
+  assert.deepStrictEqual(list, [a, b, c], "…and the original list is never mutated");
+}
+
 /* --- review model ----------------------------------------------------------
    Fold placement, split pairing, comment threading, cursor arithmetic and the
    height estimates the windowed list indexes by. All of this used to be inline

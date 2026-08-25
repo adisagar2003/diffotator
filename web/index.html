@@ -139,6 +139,12 @@
   </div>
 </div>
 
+<!-- undo toast: a deleted comment is unsent work, and delete has no dialog -->
+<div id="toast" class="toast" hidden>
+  <span id="toastText"></span>
+  <button id="toastUndo" class="linkish">Undo <kbd>⌘Z</kbd></button>
+</div>
+
 <div id="done" class="done" hidden>
   <div class="done-card">
     <div id="doneIcon" class="done-icon">✓</div>
@@ -165,6 +171,7 @@
       <tr><td><kbd>b</kbd></td><td>toggle sidebar</td></tr>
       <tr><td><kbd>/</kbd></td><td>filter files</td></tr>
       <tr><td><kbd>⌘⏎</kbd></td><td>save comment / send feedback</td></tr>
+      <tr><td><kbd>⌘Z</kbd></td><td>undo the last deleted comment</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>close popover, dialog or filter</td></tr>
     </table>
     <div class="modal-foot"><div class="grow"></div><button id="helpClose" class="btn primary">Got it</button></div>
