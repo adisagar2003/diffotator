@@ -909,12 +909,18 @@ $("#streamSummary").addEventListener("click", (e) => {
    header so they stay one visual language. Buttons, not checkboxes: their
    clicks must not bubble into the row's own set-active / collapse behavior,
    and a pill can carry the on-state styling a native box cannot. */
-const pillsHtml = (viewed, full) => `<span class="pills">
+const pillsHtml = (viewed, full, fileCmt = 0) => `<span class="pills">
+    <button class="pill pcomment${fileCmt ? " on" : ""}" data-pcomment title="Comment on this file as a whole">🗨${fileCmt ? " " + fileCmt : ""}</button>
     <button class="pill pfull${full ? " on" : ""}" data-pfull title="Show the whole file, not just the diff (f)">Full file</button>
     <button class="pill pviewed${viewed ? " on" : ""}" data-pviewed title="Mark reviewed and fold the file (v also jumps to the next unviewed)"><span class="ck">${viewed ? "✓" : ""}</span>Viewed</button>
   </span>`;
 
 const isFull = (path) => !!(path && (S.perFile.get(path) || {}).full);
+/* A comment about the file itself, rather than about a line in it: `line` is
+   null, so it can never collide with a line comment and never lands in a
+   gutter badge. */
+const isFileComment = (a) => a.line == null;
+const fileCommentCount = (path) => S.ann.filter((a) => a.file === path && isFileComment(a)).length;
 
 /** Every selected file in one sweep, then one persist + repaint — per-file
     setViewed would save the draft and rebuild once per file. Folds too, the
@@ -1344,7 +1350,7 @@ const ROW_HTML = {
     return `<div class="cmtcard" style="top:${top}px;height:${RM.itemHeight(item, charsPerComment())}px" data-cid="${a.id}">
       <div class="cc-head">
         <span class="lbl-pill${a.blocking ? " blocking" : ""}">${esc(a.label)}${a.blocking ? " · blocking" : ""}</span>
-        <span class="cc-loc">${a.side === "old" ? "old " : ""}L${a.line}</span>
+        <span class="cc-loc">${isFileComment(a) ? "whole file" : (a.side === "old" ? "old " : "") + "L" + a.line}</span>
         <span class="grow"></span>
         <button class="cc-act" data-edit="${a.id}">edit</button>
         <button class="cc-act" data-del="${a.id}">delete</button>
@@ -1389,7 +1395,7 @@ const ROW_HTML = {
       <span class="grow"></span>
       <span class="pos">${item.idx + 1} of ${item.count}</span>
       <span class="plus">+${s.additions ?? 0}</span><span class="minus">−${s.deletions ?? 0}</span>
-      ${pillsHtml(item.viewed, item.full)}
+      ${pillsHtml(item.viewed, item.full, fileCommentCount(item.f))}
     </div>`;
   },
 
@@ -1652,7 +1658,7 @@ function updateStickyHeader(force) {
     <span class="plus">+${f.additions ?? 0}</span><span class="minus">−${f.deletions ?? 0}</span>
     <span class="grow"></span>
     <span class="pos">${i + 1} of ${S.segments.length}</span>
-    ${pillsHtml(viewed, isFull(seg.file))}
+    ${pillsHtml(viewed, isFull(seg.file), fileCommentCount(seg.file))}
     <div class="nav stepper" id="stepper" hidden>
       <button data-nav="prev" title="Previous change (p)">▲</button><span class="chg" id="chgPos"></span><button data-nav="next" title="Next change (n)">▼</button>
     </div>`;
@@ -1718,6 +1724,7 @@ $("#diffBody").addEventListener("click", (e) => {
   const fh = e.target.closest(".fsh[data-fhead]");
   if (fh) {
     const p = fh.dataset.fhead;
+    if (e.target.closest("[data-pcomment]")) return openPopover(e.target.closest("[data-pcomment]"), p, "file", null);
     if (e.target.closest("[data-pviewed]")) return setViewed(p, !isViewed(p)); // folds too; v additionally advances
     if (e.target.closest("[data-pfull]")) return setFull(p, !isFull(p));
     if (e.target.closest("[data-caret]")) return setCollapsed(p, !isCollapsed(p));
@@ -1792,6 +1799,8 @@ $("#diffHeader").addEventListener("click", (e) => {
   const file = $("#diffHeader").dataset.file;
   if (!file || S.tab === "tree") return;
   if (e.target.closest("[data-shfold]")) return setCollapsed(file, !isCollapsed(file));
+  const pc = e.target.closest("[data-pcomment]");
+  if (pc) return openPopover(pc, file, "file", null);
   if (e.target.closest("[data-pviewed]")) return setViewed(file, !isViewed(file)); // folds too; v additionally advances
   if (e.target.closest("[data-pfull]")) return setFull(file, !isFull(file));
   if (e.target.closest("[data-shjump]")) return scrollToFile(file);
@@ -2167,10 +2176,17 @@ function openPopover(anchor, file, side, line) {
      anchor belongs to the diff it was opened against, so its tag must too. */
   S.popFor = { file, side, line, id: existing ? existing.id : null, scope: S.scope, meta: S.commitMeta };
   S.popLabel = existing ? existing.label : "suggestion";
-  S.focus = { file, side, line };
+  const whole = side === "file";
+  // The line cursor stays where it was: "the whole file" is not a place the
+  // cursor can sit, and moving it there would send n/p and ↑/↓ nowhere.
+  if (!whole) S.focus = { file, side, line };
 
-  $("#popTitle").textContent = `Line ${line}`;
-  $("#popCode").textContent = existing ? existing.code || "" : lineText(file, side, line);
+  $("#popTitle").textContent = whole ? `Whole file — ${file.split("/").pop()}` : `Line ${line}`;
+  /* Nothing to quote for a comment about the file: the quote box exists to say
+     "this line", and an empty one under a file-level comment is a box the
+     reader has to decide to ignore. */
+  $("#popCode").hidden = whole;
+  $("#popCode").textContent = whole ? "" : existing ? existing.code || "" : lineText(file, side, line);
   $("#popLabels").innerHTML = LABELS.map(
     (l) => `<button data-l="${l}" class="${l === S.popLabel ? "on" : ""}">${l}</button>`
   ).join("");
@@ -2178,7 +2194,8 @@ function openPopover(anchor, file, side, line) {
   $("#popBlocking").checked = existing ? !!existing.blocking : false;
   $("#popSug").value = existing ? existing.suggestion || "" : "";
   $("#popSug").hidden = !(existing && existing.suggestion);
-  $("#popAddSug").hidden = !$("#popSug").hidden;
+  // A suggestion replaces a line; there is no line here to replace.
+  $("#popAddSug").hidden = whole || !$("#popSug").hidden;
   $("#popDelete").hidden = !existing;
 
   const pop = $("#popover");
@@ -2287,7 +2304,7 @@ function renderComments() {
     S.ann
       .map(
         (a) => `<div class="cp-item" data-id="${a.id}">
-        <div class="loc">${esc(a.file)}:${a.line}</div>
+        <div class="loc">${esc(a.file)}${isFileComment(a) ? "" : ":" + a.line}</div>
         <div><span class="lbl-pill${a.blocking ? " blocking" : ""}">${a.label}${a.blocking ? " · blocking" : ""}</span></div>
         <div class="bd">${esc(a.body)}</div></div>`
       )
@@ -2309,6 +2326,9 @@ $("#cpList").addEventListener("click", async (e) => {
   // run buildItems against the stream and stomp renderTreeFile's own state
   // (e.g. its "Could not read this file" note) with the stream's empty hint.
   if (S.tab !== "tree" && !(S.perFile.get(a.file) || {}).loaded) await loadFileDiff(a.file);
+  /* A comment about the file itself has no line to land on; scrollToFile
+     above already put its header on screen, which is where the card is. */
+  if (isFileComment(a)) return renderDiff();
   // Line numbers repeat across a stream, so the file has to be part of the match.
   const target = RM.rowIndexFor(S.items, a.side, a.line, a.file);
   if (target >= 0) {
@@ -2348,7 +2368,7 @@ function openModal(decision) {
   $("#modalList").innerHTML = S.ann
     .map(
       (a) =>
-        `<div class="mi"><div class="loc">${esc(a.file)}:${a.line}</div>
+        `<div class="mi"><div class="loc">${esc(a.file)}${isFileComment(a) ? "" : ":" + a.line}</div>
           <span class="lbl-pill${a.blocking ? " blocking" : ""}">${a.label}</span> ${esc(a.body.slice(0, 160))}</div>`
     )
     .join("");

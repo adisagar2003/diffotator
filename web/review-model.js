@@ -244,6 +244,14 @@
         idx: idx++,
         count: shown.length,
       });
+      /* A comment about the file itself hangs off its header rather than off a
+         line — buildItems threads comments under the line they name, and this
+         one names none. Folded with the file, like everything else about it. */
+      if (!collapsed.has(f.path)) {
+        for (const a of annotations) {
+          if (a.file === f.path && a.line == null) items.push({ k: "comment", a, f: f.path });
+        }
+      }
       if (!collapsed.has(f.path)) {
         if (!st.loaded) {
           items.push({ k: "loading", f: f.path });

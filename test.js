@@ -44,6 +44,30 @@ assert.ok(
   assert.ok(out.includes("Looks close."), "summary included");
 }
 
+/* A comment about the file as a whole — "this module should not exist",
+   "these tests belong next to the code". It carries no line, and rendering it
+   as `file:null` / `Lnull` was the reason the UI could not offer one. */
+{
+  const out = render({
+    decision: "annotated",
+    repo: "demo",
+    scope: { type: "worktree" },
+    annotations: [
+      { file: "a.ts", side: "new", line: 12, label: "nit", body: "rename this" },
+      { file: "a.ts", side: "file", line: null, label: "issue", blocking: true, body: "this module should not exist" },
+    ],
+  });
+  assert.ok(out.includes("### a.ts — issue (blocking)"), "no line, no line suffix");
+  assert.ok(out.includes("*the whole file*"), "…and it says what it is about instead");
+  assert.ok(!out.includes("null"), "nothing renders the absent line");
+  assert.ok(
+    out.indexOf("this module should not exist") < out.indexOf("rename this"),
+    "the file-level comment comes first — it is the one to read before the line notes"
+  );
+  // An old-side note is a note about one image of a line; a file has no sides.
+  assert.ok(!out.includes("(old side)"));
+}
+
 // A comment tagged with the commit it was written against says so on its
 // location line; untagged comments render exactly as before.
 {
@@ -364,6 +388,24 @@ assert.ok(
   assert.strictEqual(out.items[segC.start + 1].k, "loading", "unloaded file holds a placeholder row");
   assert.strictEqual(RM.itemHeight(out.items[0]), RM.GEOM.fileHeader, "header height is fixed");
   assert.strictEqual(RM.itemHeight(out.items[segC.start + 1]), RM.GEOM.row, "loading row is row-height");
+
+  /* A comment about the file itself hangs off its header: buildItems threads
+     comments under the line they name, and this one names none. */
+  {
+    const fileCmt = { id: "f1", file: "a.js", side: "file", line: null, label: "issue", body: "delete this module" };
+    const withFile = RM.buildStream({ ...base, annotations: [fileCmt] });
+    assert.strictEqual(withFile.items[0].k, "fileHeader");
+    assert.strictEqual(withFile.items[1].k, "comment", "the card sits directly under its file's header");
+    assert.strictEqual(withFile.items[1].a.id, "f1");
+    assert.strictEqual(
+      withFile.items.filter((i) => i.k === "comment").length,
+      1,
+      "…once, not once per line it does not name"
+    );
+    // Folded with the file, like everything else about it.
+    const folded = RM.buildStream({ ...base, annotations: [fileCmt], collapsed: new Set(["a.js"]) });
+    assert.strictEqual(folded.segments[0].end - folded.segments[0].start, 1, "a collapsed file is still header-only");
+  }
 
   // collapse: segment folds to its header
   const col = RM.buildStream({ ...base, collapsed: new Set(["a.js"]) });
