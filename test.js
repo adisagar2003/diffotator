@@ -365,6 +365,22 @@ assert.ok(
   assert.strictEqual(RM.itemHeight(out.items[0]), RM.GEOM.fileHeader, "header height is fixed");
   assert.strictEqual(RM.itemHeight(out.items[segC.start + 1]), RM.GEOM.row, "loading row is row-height");
 
+  /* Context is a stream setting, not a request parameter: the diff already
+     arrives with full context, so widening it only unfolds what was hidden. */
+  {
+    const tight = RM.buildStream({ ...base, context: 1 });
+    const wide = RM.buildStream({ ...base, context: 8 });
+    const rowsIn = (out, file) => {
+      const seg = out.segments.find((x) => x.file === file);
+      return out.items.slice(seg.start, seg.end).filter((i) => i.k === "row").length;
+    };
+    assert.ok(rowsIn(wide, "a.js") > rowsIn(tight, "a.js"), "more context shows more rows");
+    // The memo is keyed by context too — a body cached under the old setting
+    // is a stream that ignores the control.
+    const again = RM.buildStream({ ...base, context: 1 });
+    assert.strictEqual(rowsIn(again, "a.js"), rowsIn(tight, "a.js"), "…and going back gets the tight one back");
+  }
+
   // collapse: segment folds to its header
   const col = RM.buildStream({ ...base, collapsed: new Set(["a.js"]) });
   assert.strictEqual(col.segments[0].end - col.segments[0].start, 1, "collapsed file is header-only");
