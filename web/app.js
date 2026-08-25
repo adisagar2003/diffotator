@@ -1636,6 +1636,7 @@ function updateStickyHeader(force) {
   head.dataset.file = seg.file;
   if (S.selFile !== seg.file) {
     S.selFile = seg.file;
+    saveDraft(); // debounced: a fast scroll writes the crossing it ended on, once
     updateTreeSel(seg.file); // incremental: scroll crossings must not rebuild the pane
     /* The vlist's own scroll listener painted the header rows before this one
        ran, against the previous selFile — repaint or the blue rail trails the
@@ -2134,6 +2135,8 @@ function saveDraft() {
         viewed: [...S.viewed],
         desel: [...S.desel],
         collapsed: [...S.collapsed],
+        // Where the reading was, for the next session to come back to.
+        where: { scope: scopeId(), name: S.scopeName, file: S.selFile },
       }),
     }).catch(() => {});
   }, 250);
@@ -2145,6 +2148,29 @@ function loadDraft() {
   S.viewed = new Set(d.viewed || []);
   S.desel = new Set(d.desel || []);
   S.collapsed = new Set(d.collapsed || []);
+}
+
+/* Resume the scope and file the last session was reading.
+ *
+ * A hint, never a demand: the scope may not exist any more (a commit rebased
+ * away, a branch deleted), and a scope that resolves to nothing is worse than
+ * the default — the reader is dropped into an empty review of something they
+ * cannot see. So it counts as resumed only if it actually has files, and the
+ * caller falls back to the ordinary boot choice otherwise. */
+async function resumeWhere() {
+  const w = S.ov && S.ov.draft && S.ov.draft.where;
+  if (!w || !w.scope) return false;
+  let scope;
+  try {
+    scope = Scope.parse(w.scope);
+  } catch {
+    return false; // a draft written by an older build, or a hand-edited file
+  }
+  await setScope(scope, w.name || Scope.label(scope));
+  if (!S.files.length) return false;
+  // After the files land, not before: scrollToFile needs the segment to exist.
+  if (w.file && S.files.some((f) => f.path === w.file)) scrollToFile(w.file);
+  return true;
 }
 
 function lineText(file, side, line) {
@@ -2624,6 +2650,7 @@ document.addEventListener("keydown", (e) => {
   loadDraft();
   render();
   await loadCommits(false); // the initial scope below owns what gets shown
+  if (await resumeWhere()) return;
   await setScope({ type: "worktree" }, "Local Changes");
   if (!S.files.length && S.ov.base) {
     await setScope({ type: "range", base: S.ov.base.ref, head: "HEAD" }, "Branch");

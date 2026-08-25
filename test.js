@@ -1039,6 +1039,32 @@ async function draftsAndHook() {
   D.clearDraft(root);
   assert.strictEqual(D.loadDraft(root), null, "submitting clears the draft");
 
+  /* The reading position: which scope, which file, so a review reopened by the
+     next hook fire comes back where it was left. A bookmark, not work — it is
+     validated hard and dropped silently when it cannot be trusted. */
+  const withWhere = (w) => {
+    D.saveDraft(root, { ann: [{ id: "a1", file: "a.ts", line: 1, body: "hm" }], where: w });
+    return D.loadDraft(root).where;
+  };
+  assert.deepStrictEqual(
+    withWhere({ scope: "range:origin/main...HEAD", name: "Branch", file: "src/a.ts" }),
+    { scope: "range:origin/main...HEAD", name: "Branch", file: "src/a.ts" },
+    "the position round-trips"
+  );
+  assert.strictEqual(withWhere({ name: "Branch" }), null, "…but not without a scope to resume into");
+  assert.deepStrictEqual(withWhere({ scope: "worktree", file: 42 }), { scope: "worktree", name: null, file: null },
+    "a non-string is dropped, not stored and handed back as a path");
+  assert.strictEqual(withWhere({ scope: "x".repeat(600) }), null, "…and neither is an unreasonable one");
+  assert.strictEqual(withWhere("worktree"), null, "a string where an object belongs is not a position");
+  assert.strictEqual(withWhere(undefined), null, "a draft written before positions existed still loads");
+
+  // A position on its own is not work worth keeping a file for.
+  D.clearDraft(root);
+  D.saveDraft(root, { where: { scope: "worktree", file: "a.ts" } });
+  assert.strictEqual(D.loadDraft(root), null, "a bookmark with nothing bookmarked writes nothing");
+
+  D.clearDraft(root);
+
   // --- the gate ------------------------------------------------------------
   const at = (input, opts) => H.decide({ cwd: d, ...input }, opts);
 
