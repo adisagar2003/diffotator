@@ -732,15 +732,34 @@ function renderFileTree() {
   const isTreeTab = S.tab === "tree";
   const paths = isTreeTab ? S.treePaths || [] : S.files.map((f) => f.path);
   const meta = new Map(S.files.map((f) => [f.path, f]));
-  const filter = S.filter.toLowerCase();
+  const terms = RM.parseFilter(S.filter);
   const box = $("#fileTree");
 
-  const flat = filter || (S.listMode && !isTreeTab);
+  /* Counted once, not once per row: `commented` asks about every path, and a
+     scan of S.ann per row is the shape that turns a filter keystroke into a
+     visible stall on a big review. */
+  const cmtCount = new Map();
+  for (const a of S.ann) cmtCount.set(a.file, (cmtCount.get(a.file) || 0) + 1);
+  const descOf = (p) => {
+    const m = meta.get(p);
+    return {
+      path: p,
+      status: m && m.status,
+      binary: m && m.binary,
+      viewed: isViewed(p),
+      comments: cmtCount.get(p) || 0,
+      // Only changed files can be in the stream; for the rest the word simply
+      // never matches, which is the honest answer.
+      selected: m ? isSelected(p) : undefined,
+    };
+  };
+
+  const flat = terms.length || (S.listMode && !isTreeTab);
   if (flat) {
-    const hits = (filter ? paths.filter((p) => p.toLowerCase().includes(filter)) : paths).slice(0, 800);
+    const hits = (terms.length ? paths.filter((p) => RM.matchFile(terms, descOf(p))) : paths).slice(0, 800);
     box.innerHTML =
       hits.map((p) => fileRow(p, meta.get(p), 0, null)).join("") ||
-      `<div class="empty-state">${filter ? "No match" : "No changes"}</div>`;
+      `<div class="empty-state">${terms.length ? "No match" : "No changes"}</div>`;
     return;
   }
 

@@ -606,6 +606,64 @@
     };
   }
 
+  // --- file filter ---------------------------------------------------------
+
+  /**
+   * The filter box used to answer exactly one question — "does the path
+   * contain this?" — while the questions a reviewer actually asks halfway
+   * through are "what have I not read yet?" and "where did I leave comments?".
+   * Both were answerable only by scrolling the list and squinting at ticks.
+   *
+   * The grammar is deliberately tiny: whitespace-separated terms, all of which
+   * must match, `!` negates one, and a term that is not a known word is what
+   * the box always did — a substring of the path. So `src !viewed` still reads
+   * as English, and nobody has to learn anything to keep typing `server`.
+   */
+  const FILTER_WORDS = {
+    viewed: (f) => !!f.viewed,
+    unviewed: (f) => !f.viewed,
+    commented: (f) => (f.comments || 0) > 0,
+    hidden: (f) => f.selected === false, // out of the stream, per the eye toggle
+    added: (f) => f.status === "added" || f.status === "untracked",
+    untracked: (f) => f.status === "untracked",
+    deleted: (f) => f.status === "deleted",
+    modified: (f) => f.status === "modified",
+    renamed: (f) => f.status === "renamed",
+    binary: (f) => !!f.binary,
+  };
+
+  /** Terms, pre-resolved. Parsing once per keystroke beats once per row. */
+  function parseFilter(q) {
+    const terms = [];
+    for (const raw of String(q || "").trim().split(/\s+/)) {
+      if (!raw) continue;
+      const neg = raw[0] === "!";
+      const word = (neg ? raw.slice(1) : raw).toLowerCase();
+      if (!word) continue;
+      const test = FILTER_WORDS[word];
+      terms.push(test ? { neg, test } : { neg, text: word });
+    }
+    return terms;
+  }
+
+  /**
+   * `file` is `{path, status, viewed, comments, selected, binary}`. Everything
+   * but `path` is optional — the File Tree tab lists paths the change never
+   * touched, and a word about a status they do not have simply excludes them.
+   */
+  function matchFile(terms, file) {
+    const path = String((file && file.path) || "").toLowerCase();
+    for (const t of terms) {
+      const hit = t.test ? t.test(file || {}) : path.includes(t.text);
+      if (hit === t.neg) return false;
+    }
+    return true;
+  }
+
+  exp.FILTER_WORDS = Object.keys(FILTER_WORDS);
+  exp.parseFilter = parseFilter;
+  exp.matchFile = matchFile;
+
   exp.GEOM = GEOM;
   exp.timelineRows = timelineRows;
   exp.timelineScope = timelineScope;
