@@ -40,6 +40,24 @@
     return DISMISS_ORDER.find((id) => open[id]) || null;
   }
 
+  /**
+   * Where Tab goes inside an overlay, given how many focusable controls it has
+   * and which one holds focus. Wrapping is the whole point: an overlay with no
+   * backdrop that lets Tab walk out of it leaves the reader typing into the
+   * diff behind a dialog that is still on screen — and, in the popover's case,
+   * still holding the comment they were writing.
+   *
+   * `current` of -1 means focus is not in the overlay at all (it never
+   * entered, or something outside stole it), and the answer is the first
+   * control going forwards, the last going backwards.
+   */
+  function tabTarget(count, current, shift) {
+    if (!count) return -1;
+    if (current < 0) return shift ? count - 1 : 0;
+    return shift ? (current - 1 + count) % count : (current + 1) % count;
+  }
+
+  exp.tabTarget = tabTarget;
   exp.SHORTCUTS = SHORTCUTS;
   exp.shortcut = shortcut;
   exp.DISMISS_ORDER = DISMISS_ORDER;

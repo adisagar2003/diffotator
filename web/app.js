@@ -2410,12 +2410,41 @@ async function submit(decision) {
   $("#done").hidden = false;
 }
 
+/* Focus containment.
+ *
+ * None of the three overlays has a backdrop — deliberately, so the diff stays
+ * readable behind them — which means Tab used to walk straight out of an open
+ * dialog and into the file list, leaving the reader typing into a page they
+ * could not see under a dialog that was still on screen. In the popover's case
+ * it also left an unsaved comment behind.
+ *
+ * Topmost-first, the same order Escape dismisses in: whatever Escape would
+ * close is whatever currently owns the keyboard.
+ */
+const TRAPS = ["popover", "modal", "helpSheet"];
+const FOCUSABLE = "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
+function trapTab(e) {
+  const box = TRAPS.map((id) => $("#" + id)).find((el) => el && !el.hidden);
+  if (!box) return false;
+  const nodes = [...box.querySelectorAll(FOCUSABLE)].filter((n) => !n.disabled && !n.hidden && n.offsetParent !== null);
+  const to = Keys.tabTarget(nodes.length, nodes.indexOf(document.activeElement), e.shiftKey);
+  if (to < 0) return false;
+  e.preventDefault();
+  nodes[to].focus();
+  return true;
+}
+
 function closeHelp() {
   const pane = curPane();
   $("#helpSheet").hidden = true;
   restoreFocus(pane);
 }
-$("#btnHelp").onclick = () => ($("#helpSheet").hidden = false);
+$("#btnHelp").onclick = () => {
+  $("#helpSheet").hidden = false;
+  // Somewhere inside, or the trap has nothing to cycle and Escape is the only
+  // way out a keyboard user can find.
+  $("#helpClose").focus();
+};
 $("#helpClose").onclick = closeHelp;
 
 // ---------------------------------------------------------------------------
@@ -2545,6 +2574,7 @@ document.addEventListener("keydown", (e) => {
     dismiss();
     return;
   }
+  if (e.key === "Tab" && trapTab(e)) return;
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
     e.preventDefault();
     openSearch();
@@ -2596,7 +2626,7 @@ document.addEventListener("keydown", (e) => {
       $("#btnComments").click();
       break;
     case "?":
-      $("#helpSheet").hidden = false;
+      $("#btnHelp").click(); // one way in, so the sheet always gets focus
       break;
     case "/":
       $("#fileFilter").focus();
