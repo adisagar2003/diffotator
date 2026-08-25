@@ -3,6 +3,7 @@ const { execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const Scope = require("./scope");
+const crypto = require("crypto");
 
 const US = "\x1f"; // unit separator
 const RS = "\x1e"; // record separator
@@ -55,6 +56,23 @@ async function probe(cwd, args, fallback = "") {
 async function repoRoot(cwd) {
   const out = await git(cwd, ["rev-parse", "--show-toplevel"]);
   return out.trim();
+}
+
+/**
+ * A hash of the working tree's state — `git status` plus the patch against
+ * HEAD, not a file list, so an edit in place counts as a change.
+ *
+ * Two callers now: the Stop hook, which uses it to stay quiet when nothing has
+ * moved since the last review, and the open review itself, which uses it to
+ * notice that the agent kept working underneath it. One definition, because
+ * two answers to "has this changed?" that disagree is the bug.
+ */
+async function treeFingerprint(root) {
+  const [status, patch] = await Promise.all([
+    probe(root, ["status", "--porcelain"]),
+    probe(root, ["diff", "HEAD"]), // no HEAD yet in a repo with no commits
+  ]);
+  return crypto.createHash("sha1").update(status).update(patch).digest("hex");
 }
 
 /** Best guess at the branch this work forked from, for a "branch vs base" review scope. */
@@ -511,4 +529,5 @@ module.exports = {
   fileContent,
   tree,
   detectBase,
+  treeFingerprint,
 };

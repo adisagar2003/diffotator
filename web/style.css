@@ -43,6 +43,13 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .ptext .a{color:#4fae63}.ptext .d{color:#d1596a}
 .tnode.seen .nm,.tnode.seen .stat{opacity:.45}
 .tnode.seen .caret{color:var(--ok);opacity:1;font-size:11px;font-weight:700}
+/* Warn-coloured, and a button: it is the only chip in the bar you can act on,
+   and it has to read as "something happened" without reading as an error. */
+.chip.stale{
+  color:#e8c877;border-color:#6b5a2a;background:#3a3016;cursor:pointer;
+  border-style:solid;border-width:1px;border-radius:10px;padding:1px 8px;font-size:11px
+}
+.chip.stale:hover{border-color:var(--warn);color:#f6dfa4}
 .chip.scope{color:#9fd0ff;border-color:#2d4c7e;background:#1b2a3f}
 .btn{
   height:26px;padding:0 11px;border-radius:6px;border:1px solid var(--border);
