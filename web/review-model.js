@@ -435,6 +435,26 @@
     return hits;
   }
 
+  /**
+   * What the find bar should say. The search has always covered the whole
+   * stream — every loaded file, not just the one on screen — but the counter
+   * said "4/23" and nothing else, so a hit three files down was indistinguishable
+   * from a hit in the file being read until the scroll landed somewhere
+   * unexpected.
+   *
+   * The file is named, shortened from the left: the tail of a path is what
+   * tells two files apart, and the bar has room for about that much.
+   */
+  function searchSummary(items, hits, idx, q) {
+    if (!q) return "";
+    if (!hits || !hits.length) return "no matches";
+    const at = items[hits[Math.min(idx, hits.length - 1)]];
+    const file = (at && at.f) || "";
+    const parts = file.split("/");
+    const short = parts.length > 2 ? "…/" + parts.slice(-2).join("/") : file;
+    return `${Math.min(idx, hits.length - 1) + 1}/${hits.length}${short ? " · " + short : ""}`;
+  }
+
   /** Next path not yet marked viewed, wrapping from `current`. */
   function nextUnviewed(paths, current, isViewed) {
     if (!paths.length) return null;
@@ -623,6 +643,7 @@
   exp.changeStarts = changeStarts;
   exp.focusStep = focusStep;
   exp.searchHits = searchHits;
+  exp.searchSummary = searchSummary;
   exp.nextUnviewed = nextUnviewed;
   exp.sideRows = sideRows;
   exp.sideGroup = sideGroup;

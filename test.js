@@ -319,6 +319,25 @@ assert.ok(
   assert.strictEqual(RM.sideGroup([]).badge, "0");
 }
 
+// --- what the find bar says -------------------------------------------------
+{
+  const items = [
+    { k: "row", f: "src/server.js" },
+    { k: "row", f: "src/server.js" },
+    { k: "row", f: "web/very/deep/path/app.js" },
+  ];
+  const sum = (hits, idx, q) => RM.searchSummary(items, hits, idx, q);
+  assert.strictEqual(sum([], 0, ""), "", "an empty query says nothing, not 'no matches'");
+  assert.strictEqual(sum([], 0, "zzz"), "no matches");
+  // The search has always covered the whole stream; the counter never said so,
+  // so a hit three files down looked exactly like a hit in the file being read.
+  assert.strictEqual(sum([0, 2], 0, "x"), "1/2 · src/server.js");
+  assert.strictEqual(sum([0, 2], 1, "x"), "2/2 · …/path/app.js", "a long path keeps its tail");
+  // Files stream in while a search is open, so the hit list grows underneath a
+  // stale index rather than staying still.
+  assert.strictEqual(sum([0], 7, "x"), "1/1 · src/server.js", "an index past the end clamps, not crashes");
+}
+
 // --- buildStream: many files, one windowed list ----------------------------
 {
   const ctx = (i) => ({ t: "ctx", o: i, n: i, s: "line" + i });
