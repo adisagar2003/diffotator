@@ -97,12 +97,17 @@ async function overview(root, { base } = {}) {
     listStashes(root),
     detectBase(root, branch, base),
   ]);
+  /* Counted here rather than by the page, so the Staged row carries a number
+     from the first paint instead of staying blank until someone clicks it. */
+  const stagedOut = await probe(root, ["diff", "--cached", "--name-only"]);
+  const stagedCount = stagedOut.split("\n").filter(Boolean).length;
   return {
     name: path.basename(nameRaw.trim() || root),
     root,
     branch,
     head: headRaw.trim(),
     base: detectedBase,
+    stagedCount,
     worktrees,
     branches,
     remoteBranches,

@@ -149,7 +149,7 @@ Reviews open when a turn leaves 3+ changed files.</code></pre>
 
   <section id="scopes">
     <h2>Scopes</h2>
-    <p>A <b>scope</b> is what you're reviewing. The sidebar offers three, and everything downstream —
+    <p>A <b>scope</b> is what you're reviewing. The sidebar offers four, and everything downstream —
        the file list, the diffs, the file tree — is expressed in terms of the one you pick.</p>
     <div class="tablewrap">
       <table>
@@ -158,6 +158,9 @@ Reviews open when a turn leaves 3+ changed files.</code></pre>
           <tr><td><b>Local Changes</b></td>
               <td>Working tree vs <code>HEAD</code>, including untracked files. The default, and
                   what you want straight after an agent run.</td></tr>
+          <tr><td><b>Staged</b></td>
+              <td>The index vs <code>HEAD</code> — exactly what <code>git commit</code> would record
+                  right now. Untracked files are not staged, so they are not here.</td></tr>
           <tr><td><b>vs &lt;base&gt;</b></td>
               <td>The whole branch against its base, auto-detected from your upstream then
                   <code>origin/main</code>, <code>origin/master</code>, <code>origin/develop</code>.

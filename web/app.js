@@ -33,6 +33,7 @@ const S = {
   selCommit: null,
   files: [],
   localCount: null, // working-tree changes, kept across scopes for the sidebar badge
+  stagedCount: null, // …and what is staged, counted the same way, on the same terms
   selFile: null,
   // One entry per path: {loaded, rows, fullRows, expanded, full, binary, tooBig, error, empty, mode}
   perFile: new Map(),
@@ -234,7 +235,7 @@ function measureChar() {
 function sidebar() {
   const ov = S.ov;
   let h = "";
-  for (const r of RM.sideRows({ row: S.scopeName, localCount: S.localCount, base: ov.base && ov.base.ref })) {
+  for (const r of RM.sideRows({ row: S.scopeName, localCount: S.localCount, stagedCount: S.stagedCount, base: ov.base && ov.base.ref })) {
     h += `<div class="side-item${r.active ? " active" : ""}" data-act="${r.act}">
       <span class="ico">${r.ico}</span><span class="lbl">${esc(r.label)}</span>
       <span class="badge">${r.badge}</span></div>`;
@@ -318,6 +319,7 @@ $("#sideScroll").addEventListener("click", async (e) => {
   if (!it) return;
   const act = it.dataset.act;
   if (act === "scope-worktree") setScope({ type: "worktree" }, "Local Changes");
+  else if (act === "scope-staged") setScope({ type: "staged" }, "Staged");
   else if (act === "scope-range")
     setScope({ type: "range", base: S.ov.base.ref, head: "HEAD" }, "Branch");
   else if (act === "scope-all") {
@@ -670,6 +672,7 @@ async function setScope(scope, name, keepCommits, fromTimeline) {
   S.files = files;
   // The sidebar counts the working tree whatever scope is open, so remember it.
   if (Scope.isWorktree(scope)) S.localCount = files.length;
+  if (scope && scope.type === "staged") S.stagedCount = files.length;
   render();
   fetchStream(); // not awaited: each arrival repaints the stream it lands in
   // The File Tree pane is scope-specific and was just invalidated; without this
@@ -2617,6 +2620,7 @@ document.addEventListener("keydown", (e) => {
   measureChar();
   const [ov] = await Promise.all([api("overview"), Prefs.load()]);
   S.ov = ov;
+  S.stagedCount = ov.stagedCount ?? null;
   applyPanelPrefs(); // before the first paint, so nothing visibly jumps
   document.title = `${S.ov.name} — diffotator`;
   $("#repoName").textContent = S.ov.title || S.ov.name;

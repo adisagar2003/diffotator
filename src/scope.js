@@ -52,6 +52,23 @@
       diffArgs: async (s, git) => [(await git.headExists()) ? "HEAD" : await git.emptyTree()],
     },
 
+    /**
+     * What `git commit` would record right now. The step everyone takes before
+     * committing — "show me exactly what is about to go in" — had no scope, so
+     * reviewing a partially staged tree meant reading the staged and unstaged
+     * halves as one blur.
+     *
+     * Not a worktree scope: `isWorktree` gates untracked files and the index,
+     * and an untracked file is by definition not staged.
+     */
+    staged: {
+      encode: () => "staged",
+      decode: () => ({ type: "staged" }),
+      label: () => "staged vs HEAD",
+      rev: () => "HEAD",
+      diffArgs: async (s, git) => ["--cached", (await git.headExists()) ? "HEAD" : await git.emptyTree()],
+    },
+
     commit: {
       encode: (s) => "commit:" + ref(s.sha, "sha"),
       decode: (rest) => ({ type: "commit", sha: ref(rest, "sha") }),
