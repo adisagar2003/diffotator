@@ -611,6 +611,19 @@
   exp.timelineScope = timelineScope;
   exp.annCommit = annCommit;
   exp.annKey = annKey;
+  /**
+   * Put a removed comment back where it was. The comments panel and the send
+   * dialog are ordered by this list, so an undo that appends would quietly
+   * reorder the review — the comment comes back, but somewhere else, which
+   * reads as a second accident rather than the fix for the first.
+   */
+  function insertAt(list, item, i) {
+    const out = (list || []).slice();
+    out.splice(Math.max(0, Math.min(i, out.length)), 0, item);
+    return out;
+  }
+
+  exp.insertAt = insertAt;
   exp.annIndex = annIndex;
   exp.commentLines = commentLines;
   exp.itemHeight = itemHeight;
