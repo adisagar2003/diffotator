@@ -319,6 +319,42 @@ assert.ok(
   assert.strictEqual(RM.sideGroup([]).badge, "0");
 }
 
+// --- file filter grammar ----------------------------------------------------
+{
+  const m = (q, f) => RM.matchFile(RM.parseFilter(q), f);
+  const src = { path: "src/server.js", status: "modified", viewed: false, comments: 0, selected: true };
+  const seen = { path: "web/app.js", status: "modified", viewed: true, comments: 2, selected: true };
+  const gone = { path: "old/dead.js", status: "deleted", viewed: false, comments: 0, selected: false };
+
+  // The thing it always did still works, and an empty box hides nothing.
+  assert.ok(m("server", src) && !m("server", seen), "a bare term is still a path substring");
+  assert.ok(m("", gone) && m("   ", gone), "an empty filter is not a filter");
+  assert.ok(m("SERVER", src), "matching is case-insensitive, as the box always was");
+
+  // The two questions a reviewer actually asks halfway through.
+  assert.ok(m("unviewed", src) && !m("unviewed", seen));
+  assert.ok(m("commented", seen) && !m("commented", src));
+
+  // Terms are ANDed, and `!` negates one of them.
+  assert.ok(m("web viewed", seen) && !m("src viewed", seen), "every term has to match");
+  assert.ok(m("!viewed", src) && !m("!viewed", seen));
+  assert.ok(!m("!web", seen), "negation applies to plain substrings too");
+  assert.ok(m("deleted", gone) && !m("deleted", src));
+  assert.ok(m("hidden", gone) && !m("hidden", src), "hidden means out of the stream, not deleted");
+
+  // An untracked file is an addition — that is what the reviewer means by it —
+  // without losing the narrower word.
+  const fresh = { path: "new.txt", status: "untracked" };
+  assert.ok(m("added", fresh) && m("untracked", fresh));
+  assert.ok(!m("untracked", { path: "a.js", status: "added" }), "…but not the other way round");
+
+  // The File Tree tab lists paths the change never touched: no meta at all.
+  const untouched = { path: "docs/readme.md" };
+  assert.ok(m("docs", untouched), "a path with no status still matches on its path");
+  assert.ok(!m("modified", untouched), "…and a word about a status it lacks excludes it");
+  assert.ok(m("unviewed", untouched), "…while 'not read yet' is true of everything unread");
+}
+
 // --- buildStream: many files, one windowed list ----------------------------
 {
   const ctx = (i) => ({ t: "ctx", o: i, n: i, s: "line" + i });

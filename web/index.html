@@ -56,7 +56,8 @@
       <div id="panes">
         <div id="leftPane">
           <div class="filter-row">
-            <input id="fileFilter" class="filter" placeholder="Filter files…" spellcheck="false">
+            <input id="fileFilter" class="filter" placeholder="Filter files… (try unviewed)" spellcheck="false"
+                   title="Substring of the path, plus the words: unviewed, viewed, commented, added, deleted, modified, renamed, untracked, binary, hidden. Prefix with ! to negate; terms are ANDed.">
             <div class="seg tiny">
               <button id="segList" class="seg-btn active" title="Flat list of files">List</button>
               <button id="segTree" class="seg-btn" title="Directory tree">Tree</button>
@@ -159,7 +160,7 @@
       <tr><td><kbd>v</kbd></td><td>mark viewed &amp; go to next unviewed</td></tr>
       <tr><td><kbd>t</kbd></td><td>toggle comments panel</td></tr>
       <tr><td><kbd>b</kbd></td><td>toggle sidebar</td></tr>
-      <tr><td><kbd>/</kbd></td><td>filter files</td></tr>
+      <tr><td><kbd>/</kbd></td><td>filter files — a path substring, or <code>unviewed</code>, <code>commented</code>, <code>added</code>, <code>deleted</code>, <code>modified</code>, <code>renamed</code>, <code>untracked</code>, <code>binary</code>, <code>hidden</code>; <code>!</code> negates</td></tr>
       <tr><td><kbd>⌘⏎</kbd></td><td>save comment / send feedback</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>close popover, dialog or filter</td></tr>
     </table>
