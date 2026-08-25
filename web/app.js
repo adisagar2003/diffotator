@@ -2611,6 +2611,54 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ---------------------------------------------------------------------------
+// staleness
+// ---------------------------------------------------------------------------
+/*
+ * An agent does not stop working because someone opened a review of it. The
+ * hook case is worse: the review opens, the reader reads, and meanwhile the
+ * next turn rewrites the files under the diff on screen — so the comments go
+ * back about code that has already moved.
+ *
+ * A poll, not a watcher: one cheap hash every few seconds costs less than
+ * fs.watch's platform quirks, its rename storms and its editor-swapfile noise,
+ * and the answer is only ever used to light a chip.
+ *
+ * It never reloads on its own. A review is a train of thought, and a diff that
+ * rearranges itself mid-sentence is worse than a stale one you know is stale.
+ */
+const STALE_POLL_MS = 5000;
+let treeFp = null;
+
+async function pollTree() {
+  // A hidden tab is not being read; polling it burns a git process per tick
+  // for an answer nobody can see, and the visibility change re-checks anyway.
+  if (document.hidden) return;
+  let fp;
+  try {
+    ({ fp } = await api("fingerprint"));
+  } catch {
+    return; // the server going away is teardown, not a change worth shouting about
+  }
+  if (treeFp == null) treeFp = fp; // first answer is the baseline, not a change
+  else if (fp !== treeFp) $("#staleChip").hidden = false;
+}
+
+/* Reload in place rather than reloading the page: the page would come back
+   with the draft (it lives on the server) but without the scroll position,
+   the open file or the pane the reader was in. */
+async function reloadReview() {
+  $("#staleChip").hidden = true;
+  treeFp = null; // re-baselined by the next poll, against whatever is there now
+  cache.clear();
+  await setScope(S.scope, S.scopeName);
+  pollTree();
+}
+$("#staleChip").onclick = reloadReview;
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) pollTree();
+});
+
+// ---------------------------------------------------------------------------
 // boot
 // ---------------------------------------------------------------------------
 (async function boot() {
@@ -2625,6 +2673,8 @@ document.addEventListener("keydown", (e) => {
   render();
   await loadCommits(false); // the initial scope below owns what gets shown
   await setScope({ type: "worktree" }, "Local Changes");
+  pollTree();
+  setInterval(pollTree, STALE_POLL_MS);
   if (!S.files.length && S.ov.base) {
     await setScope({ type: "range", base: S.ov.base.ref, head: "HEAD" }, "Branch");
   }

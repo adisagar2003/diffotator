@@ -1366,6 +1366,23 @@ async function httpSurface() {
   assert.strictEqual(await status("/keys.js"), 200, "…and the keyboard policy it shares with the page");
   assert.strictEqual(await status("/%2e%2e%2fpackage.json"), 404, "static serving stays inside web/");
 
+  /* The page polls this to notice that the agent kept working underneath an
+     open review. An edit in place has to count — a file list would not see it. */
+  {
+    const fp = async () => (await json("/api/fingerprint")).fp;
+    const before = await fp();
+    assert.match(before, /^[0-9a-f]{40}$/);
+    assert.strictEqual(await fp(), before, "a quiet tree gives the same answer twice");
+    fs.writeFileSync(path.join(d, "a.ts"), "const a = 3;\n"); // same file, same size, new content
+    assert.notStrictEqual(await fp(), before, "an edit in place is a change");
+    const edited = await fp();
+    fs.writeFileSync(path.join(d, "untracked.ts"), "x\n");
+    assert.notStrictEqual(await fp(), edited, "…and so is a file appearing");
+    fs.unlinkSync(path.join(d, "untracked.ts"));
+    fs.writeFileSync(path.join(d, "a.ts"), "const a = 2;\n");
+    assert.strictEqual(await fp(), before, "undoing every change reads as unchanged again");
+  }
+
   // Submitting resolves the session promise; the server never touches teardown.
   assert.deepStrictEqual(
     await json("/api/submit", {

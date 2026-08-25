@@ -127,6 +127,10 @@ const ROUTES = {
     full: await G.fileContent(root, scope, q.get("file")),
   }),
 
+  /* "Has the tree moved under me?" — one cheap hash the page polls while a
+     review is open. Same hash the Stop hook uses, from the same function. */
+  "GET /api/fingerprint": async ({ root }) => ({ fp: await G.treeFingerprint(root) }),
+
   "GET /api/tree": async ({ root, scope }) => ({ paths: await G.tree(root, scope) }),
 
   "POST /api/submit": async ({ root, body, submit }) => {

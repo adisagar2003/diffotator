@@ -13,7 +13,6 @@
  *
  * Only what survives all four opens a browser.
  */
-const crypto = require("crypto");
 const G = require("./git");
 const D = require("./drafts");
 
@@ -63,13 +62,11 @@ function readStdin() {
  * Identity of the current working tree. Must be content-sensitive: a file list
  * alone would call an edited-in-place file "already reviewed".
  */
-async function fingerprint(root) {
-  const [status, patch] = await Promise.all([
-    G.probe(root, ["status", "--porcelain"]),
-    G.probe(root, ["diff", "HEAD"]), // no HEAD yet in a repo with no commits
-  ]);
-  return crypto.createHash("sha1").update(status).update(patch).digest("hex");
-}
+/* Lives in the git layer now: the open review asks the same question to notice
+   that the agent kept working underneath it, and two answers to "has this
+   changed?" that can disagree is the bug. Re-exported because the hook's own
+   tests and callers have always named it here. */
+const fingerprint = G.treeFingerprint;
 
 const allow = () => ({ verdict: "allow" });
 
