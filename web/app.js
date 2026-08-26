@@ -1887,7 +1887,7 @@ function runSearch(q, jump = true) {
   // A repaint re-runs the search but must not move the reader: only a new query
   // or an explicit next/prev jumps.
   S.search.idx = Math.min(at, Math.max(0, hits.length - 1));
-  $("#searchCount").textContent = hits.length ? `${S.search.idx + 1}/${hits.length}` : q ? "no matches" : "";
+  paintSearchCount();
   if (jump && hits.length) {
     S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
     diffVL.scrollToIndex(hits[0], true);
@@ -1895,12 +1895,18 @@ function runSearch(q, jump = true) {
   }
   diffVL.refresh();
 }
+/* One writer for the counter. It used to be written at three call sites in two
+   formats, which is why "no matches" only ever appeared from one of them. */
+function paintSearchCount() {
+  $("#searchCount").textContent = RM.searchSummary(S.items, S.search.hits, S.search.idx, S.search.q);
+}
+
 function stepSearch(d) {
   const h = S.search.hits;
   if (!h.length) return;
   S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
   S.search.idx = (S.search.idx + d + h.length) % h.length;
-  $("#searchCount").textContent = `${S.search.idx + 1}/${h.length}`;
+  paintSearchCount();
   const at = h[S.search.idx];
   diffVL.scrollToIndex(at, true);
   pinAfterScroll(S.items[at] && S.items[at].f);
