@@ -375,6 +375,29 @@
   }
 
   /**
+   * The next comment card in the stream, wrapping. `n`/`p` walk changes, which
+   * is how you read a review the first time; this is how you walk it the
+   * second time — over what you already said, to check it still makes sense
+   * before sending. Wrapping is deliberate: the set is small and finite, so
+   * running off the end and stopping is worse than coming back round.
+   *
+   * Returns -1 when there is nothing to visit, which includes "the only
+   * comment is the one already under the cursor" — moving nowhere and saying
+   * nothing beats a jump that does not move.
+   */
+  function findComment(items, from, dir) {
+    const idx = [];
+    for (let i = 0; i < items.length; i++) if (items[i] && items[i].k === "comment") idx.push(i);
+    if (!idx.length) return -1;
+    if (dir > 0) {
+      const next = idx.find((i) => i > from);
+      return next == null ? idx[0] : next;
+    }
+    const prev = [...idx].reverse().find((i) => i < from);
+    return prev == null ? idx[idx.length - 1] : prev;
+  }
+
+  /**
    * Item indices where each change block in [start, end) begins, walking
    * blocks exactly as `findChange` does. Feeds the "change 3 of 12" counter
    * next to the prev/next arrows: the app caches this per (items, file) and
@@ -699,6 +722,7 @@
   exp.rowLine = rowLine;
   exp.rowIndexFor = rowIndexFor;
   exp.findChange = findChange;
+  exp.findComment = findComment;
   exp.changeStarts = changeStarts;
   exp.focusStep = focusStep;
   exp.searchHits = searchHits;

@@ -18,7 +18,7 @@
   /* The single-key shortcuts the handler owns. All of them get defaulted, not
      just the two that move focus into a text box, because "remember to
      preventDefault in this case" is the rule that already got forgotten once. */
-  const SHORTCUTS = "jknpsfvt?/cbw";
+  const SHORTCUTS = "jknpsfvt?/cb[]w";
 
   /**
    * The shortcut a keystroke means, or null for one the page keeps.
