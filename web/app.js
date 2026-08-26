@@ -69,6 +69,7 @@ const S = {
   commitsDone: false,
   tl: null, // commit timeline: { base, head, commits, sel, mode } while the scope family is a range
   commitMeta: null, // banner metadata for the current commit scope; tags comments with their commit
+  ignoreWs: false, // `git diff -w`: a reindent should not read as a rewrite
 };
 
 // ---------------------------------------------------------------------------
@@ -731,15 +732,34 @@ function renderFileTree() {
   const isTreeTab = S.tab === "tree";
   const paths = isTreeTab ? S.treePaths || [] : S.files.map((f) => f.path);
   const meta = new Map(S.files.map((f) => [f.path, f]));
-  const filter = S.filter.toLowerCase();
+  const terms = RM.parseFilter(S.filter);
   const box = $("#fileTree");
 
-  const flat = filter || (S.listMode && !isTreeTab);
+  /* Counted once, not once per row: `commented` asks about every path, and a
+     scan of S.ann per row is the shape that turns a filter keystroke into a
+     visible stall on a big review. */
+  const cmtCount = new Map();
+  for (const a of S.ann) cmtCount.set(a.file, (cmtCount.get(a.file) || 0) + 1);
+  const descOf = (p) => {
+    const m = meta.get(p);
+    return {
+      path: p,
+      status: m && m.status,
+      binary: m && m.binary,
+      viewed: isViewed(p),
+      comments: cmtCount.get(p) || 0,
+      // Only changed files can be in the stream; for the rest the word simply
+      // never matches, which is the honest answer.
+      selected: m ? isSelected(p) : undefined,
+    };
+  };
+
+  const flat = terms.length || (S.listMode && !isTreeTab);
   if (flat) {
-    const hits = (filter ? paths.filter((p) => p.toLowerCase().includes(filter)) : paths).slice(0, 800);
+    const hits = (terms.length ? paths.filter((p) => RM.matchFile(terms, descOf(p))) : paths).slice(0, 800);
     box.innerHTML =
       hits.map((p) => fileRow(p, meta.get(p), 0, null)).join("") ||
-      `<div class="empty-state">${filter ? "No match" : "No changes"}</div>`;
+      `<div class="empty-state">${terms.length ? "No match" : "No changes"}</div>`;
     return;
   }
 
@@ -909,12 +929,18 @@ $("#streamSummary").addEventListener("click", (e) => {
    header so they stay one visual language. Buttons, not checkboxes: their
    clicks must not bubble into the row's own set-active / collapse behavior,
    and a pill can carry the on-state styling a native box cannot. */
-const pillsHtml = (viewed, full) => `<span class="pills">
+const pillsHtml = (viewed, full, fileCmt = 0) => `<span class="pills">
+    <button class="pill pcomment${fileCmt ? " on" : ""}" data-pcomment title="Comment on this file as a whole">🗨${fileCmt ? " " + fileCmt : ""}</button>
     <button class="pill pfull${full ? " on" : ""}" data-pfull title="Show the whole file, not just the diff (f)">Full file</button>
     <button class="pill pviewed${viewed ? " on" : ""}" data-pviewed title="Mark reviewed and fold the file (v also jumps to the next unviewed)"><span class="ck">${viewed ? "✓" : ""}</span>Viewed</button>
   </span>`;
 
 const isFull = (path) => !!(path && (S.perFile.get(path) || {}).full);
+/* A comment about the file itself, rather than about a line in it: `line` is
+   null, so it can never collide with a line comment and never lands in a
+   gutter badge. */
+const isFileComment = (a) => a.line == null;
+const fileCommentCount = (path) => S.ann.filter((a) => a.file === path && isFileComment(a)).length;
 
 /** Every selected file in one sweep, then one persist + repaint — per-file
     setViewed would save the draft and rebuild once per file. Folds too, the
@@ -1060,7 +1086,10 @@ $("#fileFilter").addEventListener("input", (e) => {
     store+rebuild; a scope change mid-flight discards the arrival. */
 async function loadFileDiff(path) {
   const sid = scopeId();
-  const params = { ...scopeParams(), file: path };
+  /* `ws` is part of the request url, so the request cache keys on it too: a
+     file already fetched one way is re-fetched the other way, and toggling
+     back is free. */
+  const params = { ...scopeParams(), file: path, ws: S.ignoreWs ? "1" : "0" };
   try {
     /* No `full: "1"` here. The diff already arrives with full context, so
        "Full file" only has to stop folding — asking for the whole file as
@@ -1344,7 +1373,7 @@ const ROW_HTML = {
     return `<div class="cmtcard" style="top:${top}px;height:${RM.itemHeight(item, charsPerComment())}px" data-cid="${a.id}">
       <div class="cc-head">
         <span class="lbl-pill${a.blocking ? " blocking" : ""}">${esc(a.label)}${a.blocking ? " · blocking" : ""}</span>
-        <span class="cc-loc">${a.side === "old" ? "old " : ""}L${a.line}</span>
+        <span class="cc-loc">${isFileComment(a) ? "whole file" : (a.side === "old" ? "old " : "") + "L" + a.line}</span>
         <span class="grow"></span>
         <button class="cc-act" data-edit="${a.id}">edit</button>
         <button class="cc-act" data-del="${a.id}">delete</button>
@@ -1389,7 +1418,7 @@ const ROW_HTML = {
       <span class="grow"></span>
       <span class="pos">${item.idx + 1} of ${item.count}</span>
       <span class="plus">+${s.additions ?? 0}</span><span class="minus">−${s.deletions ?? 0}</span>
-      ${pillsHtml(item.viewed, item.full)}
+      ${pillsHtml(item.viewed, item.full, fileCommentCount(item.f))}
     </div>`;
   },
 
@@ -1636,6 +1665,7 @@ function updateStickyHeader(force) {
   head.dataset.file = seg.file;
   if (S.selFile !== seg.file) {
     S.selFile = seg.file;
+    saveDraft(); // debounced: a fast scroll writes the crossing it ended on, once
     updateTreeSel(seg.file); // incremental: scroll crossings must not rebuild the pane
     /* The vlist's own scroll listener painted the header rows before this one
        ran, against the previous selFile — repaint or the blue rail trails the
@@ -1652,7 +1682,7 @@ function updateStickyHeader(force) {
     <span class="plus">+${f.additions ?? 0}</span><span class="minus">−${f.deletions ?? 0}</span>
     <span class="grow"></span>
     <span class="pos">${i + 1} of ${S.segments.length}</span>
-    ${pillsHtml(viewed, isFull(seg.file))}
+    ${pillsHtml(viewed, isFull(seg.file), fileCommentCount(seg.file))}
     <div class="nav stepper" id="stepper" hidden>
       <button data-nav="prev" title="Previous change (p)">▲</button><span class="chg" id="chgPos"></span><button data-nav="next" title="Next change (n)">▼</button>
     </div>`;
@@ -1718,6 +1748,7 @@ $("#diffBody").addEventListener("click", (e) => {
   const fh = e.target.closest(".fsh[data-fhead]");
   if (fh) {
     const p = fh.dataset.fhead;
+    if (e.target.closest("[data-pcomment]")) return openPopover(e.target.closest("[data-pcomment]"), p, "file", null);
     if (e.target.closest("[data-pviewed]")) return setViewed(p, !isViewed(p)); // folds too; v additionally advances
     if (e.target.closest("[data-pfull]")) return setFull(p, !isFull(p));
     if (e.target.closest("[data-caret]")) return setCollapsed(p, !isCollapsed(p));
@@ -1757,8 +1788,7 @@ $("#diffBody").addEventListener("click", (e) => {
   }
   const del = e.target.closest("[data-del]");
   if (del) {
-    S.ann = S.ann.filter((a) => a.id !== del.dataset.del);
-    changed();
+    deleteAnn(del.dataset.del);
     return;
   }
   const edit = e.target.closest("[data-edit]");
@@ -1792,6 +1822,8 @@ $("#diffHeader").addEventListener("click", (e) => {
   const file = $("#diffHeader").dataset.file;
   if (!file || S.tab === "tree") return;
   if (e.target.closest("[data-shfold]")) return setCollapsed(file, !isCollapsed(file));
+  const pc = e.target.closest("[data-pcomment]");
+  if (pc) return openPopover(pc, file, "file", null);
   if (e.target.closest("[data-pviewed]")) return setViewed(file, !isViewed(file)); // folds too; v additionally advances
   if (e.target.closest("[data-pfull]")) return setFull(file, !isFull(file));
   if (e.target.closest("[data-shjump]")) return scrollToFile(file);
@@ -1828,6 +1860,20 @@ function jumpChange(dir) {
   lastJump = ln ? { top: $("#diffBody").scrollTop, file: S.items[i].f, side: ln.side, line: ln.line } : null;
   pinAfterScroll(S.items[i] && S.items[i].f);
   updateChangeCounter(); // a clamped jump moves no pixels, so no scroll event fires
+}
+
+/* Walking the comments themselves. `n`/`p` walk changes — how a review is read
+   the first time; this is the second pass, over what you already said, to
+   check it still makes sense before sending. */
+function jumpComment(dir) {
+  const from = lastJumpIdx() >= 0 ? lastJumpIdx() : diffVL.topIndex();
+  const i = RM.findComment(S.items, from, dir);
+  if (i < 0) return;
+  diffVL.scrollToIndex(i, true);
+  const a = S.items[i].a;
+  lastJump = { top: $("#diffBody").scrollTop, file: S.items[i].f, side: a.side, line: a.line };
+  pinAfterScroll(S.items[i].f);
+  updateChangeCounter();
 }
 
 /* Windowing means only ~60 rows exist in the DOM, so the browser's own Find
@@ -2030,6 +2076,21 @@ function toggleSidebar() {
 }
 $("#btnSidebar").onclick = toggleSidebar;
 
+/* Whitespace is a property of the diff, not of how it is drawn, so this one
+   throws away the loaded rows and refetches. Viewed marks, folds and comments
+   are untouched — they are keyed by file and line, not by this. */
+$("#segWs").onclick = () => setIgnoreWs(!S.ignoreWs);
+function setIgnoreWs(on) {
+  if (S.ignoreWs === on) return;
+  S.ignoreWs = on;
+  $("#segWs").classList.toggle("active", on);
+  Prefs.set("diff.ignoreWs", on);
+  for (const st of S.perFile.values()) st.loaded = false;
+  S.perFile.clear();
+  rebuildStream();
+  fetchStream();
+}
+
 $("#segSplit").onclick = () => setView("split");
 $("#segUnified").onclick = () => setView("unified");
 function setView(v) {
@@ -2126,6 +2187,10 @@ function applyPanelPrefs() {
     if (v) document.getElementById(id).style[dim] = v + "px";
   }
   if (Prefs.get("panel.sidebarOff") && !$("#sidebar").classList.contains("off")) toggleSidebar();
+  /* Set before the first fetch, not through setIgnoreWs: there is nothing
+     loaded yet to throw away, and the refetch would race the boot one. */
+  S.ignoreWs = !!Prefs.get("diff.ignoreWs");
+  $("#segWs").classList.toggle("active", S.ignoreWs);
 }
 
 let draftTimer = null;
@@ -2140,6 +2205,8 @@ function saveDraft() {
         viewed: [...S.viewed],
         desel: [...S.desel],
         collapsed: [...S.collapsed],
+        // Where the reading was, for the next session to come back to.
+        where: { scope: scopeId(), name: S.scopeName, file: S.selFile },
       }),
     }).catch(() => {});
   }, 250);
@@ -2151,6 +2218,29 @@ function loadDraft() {
   S.viewed = new Set(d.viewed || []);
   S.desel = new Set(d.desel || []);
   S.collapsed = new Set(d.collapsed || []);
+}
+
+/* Resume the scope and file the last session was reading.
+ *
+ * A hint, never a demand: the scope may not exist any more (a commit rebased
+ * away, a branch deleted), and a scope that resolves to nothing is worse than
+ * the default — the reader is dropped into an empty review of something they
+ * cannot see. So it counts as resumed only if it actually has files, and the
+ * caller falls back to the ordinary boot choice otherwise. */
+async function resumeWhere() {
+  const w = S.ov && S.ov.draft && S.ov.draft.where;
+  if (!w || !w.scope) return false;
+  let scope;
+  try {
+    scope = Scope.parse(w.scope);
+  } catch {
+    return false; // a draft written by an older build, or a hand-edited file
+  }
+  await setScope(scope, w.name || Scope.label(scope));
+  if (!S.files.length) return false;
+  // After the files land, not before: scrollToFile needs the segment to exist.
+  if (w.file && S.files.some((f) => f.path === w.file)) scrollToFile(w.file);
+  return true;
 }
 
 function lineText(file, side, line) {
@@ -2173,10 +2263,17 @@ function openPopover(anchor, file, side, line) {
      anchor belongs to the diff it was opened against, so its tag must too. */
   S.popFor = { file, side, line, id: existing ? existing.id : null, scope: S.scope, meta: S.commitMeta };
   S.popLabel = existing ? existing.label : "suggestion";
-  S.focus = { file, side, line };
+  const whole = side === "file";
+  // The line cursor stays where it was: "the whole file" is not a place the
+  // cursor can sit, and moving it there would send n/p and ↑/↓ nowhere.
+  if (!whole) S.focus = { file, side, line };
 
-  $("#popTitle").textContent = `Line ${line}`;
-  $("#popCode").textContent = existing ? existing.code || "" : lineText(file, side, line);
+  $("#popTitle").textContent = whole ? `Whole file — ${file.split("/").pop()}` : `Line ${line}`;
+  /* Nothing to quote for a comment about the file: the quote box exists to say
+     "this line", and an empty one under a file-level comment is a box the
+     reader has to decide to ignore. */
+  $("#popCode").hidden = whole;
+  $("#popCode").textContent = whole ? "" : existing ? existing.code || "" : lineText(file, side, line);
   $("#popLabels").innerHTML = LABELS.map(
     (l) => `<button data-l="${l}" class="${l === S.popLabel ? "on" : ""}">${l}</button>`
   ).join("");
@@ -2184,7 +2281,8 @@ function openPopover(anchor, file, side, line) {
   $("#popBlocking").checked = existing ? !!existing.blocking : false;
   $("#popSug").value = existing ? existing.suggestion || "" : "";
   $("#popSug").hidden = !(existing && existing.suggestion);
-  $("#popAddSug").hidden = !$("#popSug").hidden;
+  // A suggestion replaces a line; there is no line here to replace.
+  $("#popAddSug").hidden = whole || !$("#popSug").hidden;
   $("#popDelete").hidden = !existing;
 
   const pop = $("#popover");
@@ -2221,10 +2319,55 @@ $("#popAddSug").onclick = () => {
 };
 $("#popDelete").onclick = () => {
   if (!S.popFor || !S.popFor.id) return;
-  S.ann = S.ann.filter((a) => a.id !== S.popFor.id);
-  changed();
+  deleteAnn(S.popFor.id);
   closePopover();
 };
+
+/* Deleting a comment throws away unsent work, and there is no dialog in the
+   way — by design, because a confirm on every delete is worse than the
+   accident it prevents. So the accident is made cheap instead: one deletion is
+   held aside, and a toast says so until it is undone or replaced.
+
+   Every delete goes through here. There were two call sites, each with its own
+   copy of the filter, and an undo bolted onto one of them would have been an
+   undo the reader could not predict. */
+let undone = null;
+let toastTimer = null;
+function deleteAnn(id) {
+  const i = S.ann.findIndex((a) => a.id === id);
+  if (i < 0) return;
+  undone = { a: S.ann[i], i };
+  S.ann.splice(i, 1);
+  changed();
+  toast(`Comment on ${undone.a.file.split("/").pop()} deleted.`);
+}
+
+function undoDelete() {
+  if (!undone) return;
+  // Back where it was, not appended — the rule lives in RM so node test.js
+  // can hold it.
+  S.ann = RM.insertAt(S.ann, undone.a, undone.i);
+  undone = null;
+  hideToast();
+  changed();
+}
+
+function toast(text) {
+  $("#toastText").textContent = text;
+  $("#toast").hidden = false;
+  clearTimeout(toastTimer);
+  /* Ten seconds, then the offer expires with the toast — an Undo that is no
+     longer on screen must not still be live under ⌘Z. */
+  toastTimer = setTimeout(() => {
+    undone = null;
+    hideToast();
+  }, 10000);
+}
+function hideToast() {
+  clearTimeout(toastTimer);
+  $("#toast").hidden = true;
+}
+$("#toastUndo").onclick = undoDelete;
 $("#popSave").onclick = savePopover;
 function savePopover() {
   const p = S.popFor;
@@ -2293,7 +2436,7 @@ function renderComments() {
     S.ann
       .map(
         (a) => `<div class="cp-item" data-id="${a.id}">
-        <div class="loc">${esc(a.file)}:${a.line}</div>
+        <div class="loc">${esc(a.file)}${isFileComment(a) ? "" : ":" + a.line}</div>
         <div><span class="lbl-pill${a.blocking ? " blocking" : ""}">${a.label}${a.blocking ? " · blocking" : ""}</span></div>
         <div class="bd">${esc(a.body)}</div></div>`
       )
@@ -2315,6 +2458,9 @@ $("#cpList").addEventListener("click", async (e) => {
   // run buildItems against the stream and stomp renderTreeFile's own state
   // (e.g. its "Could not read this file" note) with the stream's empty hint.
   if (S.tab !== "tree" && !(S.perFile.get(a.file) || {}).loaded) await loadFileDiff(a.file);
+  /* A comment about the file itself has no line to land on; scrollToFile
+     above already put its header on screen, which is where the card is. */
+  if (isFileComment(a)) return renderDiff();
   // Line numbers repeat across a stream, so the file has to be part of the match.
   const target = RM.rowIndexFor(S.items, a.side, a.line, a.file);
   if (target >= 0) {
@@ -2354,7 +2500,7 @@ function openModal(decision) {
   $("#modalList").innerHTML = S.ann
     .map(
       (a) =>
-        `<div class="mi"><div class="loc">${esc(a.file)}:${a.line}</div>
+        `<div class="mi"><div class="loc">${esc(a.file)}${isFileComment(a) ? "" : ":" + a.line}</div>
           <span class="lbl-pill${a.blocking ? " blocking" : ""}">${a.label}</span> ${esc(a.body.slice(0, 160))}</div>`
     )
     .join("");
@@ -2372,6 +2518,37 @@ $("#modalSummary").addEventListener("input", () => {
 $("#btnSend").onclick = () => openModal("annotated");
 $("#btnApprove").onclick = () => openModal("approved");
 $("#modalCancel").onclick = closeModal;
+/* A review is often worth more than one place — the agent acts on it, and the
+   same words belong in the PR a human will read. Rendered by the server, by
+   the one renderer that produces what the agent gets, so the pasted version
+   cannot drift into being a second opinion of the review. */
+$("#modalCopy").onclick = async (e) => {
+  const btn = e.currentTarget;
+  const say = (msg) => {
+    btn.textContent = msg;
+    setTimeout(() => (btn.textContent = "Copy markdown"), 1600);
+  };
+  try {
+    const r = await fetch("/api/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        decision: pendingDecision,
+        summary: $("#modalSummary").value,
+        annotations: pendingDecision === "dismissed" ? [] : S.ann,
+        scope: S.scope,
+      }),
+    });
+    const { markdown } = await r.json();
+    if (!markdown) return say("Nothing to copy");
+    await navigator.clipboard.writeText(markdown);
+    say("Copied ✓");
+  } catch {
+    // Nothing was sent and nothing was lost; the modal is still open and Send
+    // still works. Saying so beats a silent no-op.
+    say("Copy failed");
+  }
+};
 $("#modalConfirm").onclick = () => submit(pendingDecision);
 $("#btnClose").onclick = () => {
   if (S.ann.length && !confirmDiscard()) return;
@@ -2557,6 +2734,14 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (typing) return;
+  /* After the `typing` guard, deliberately: inside a comment box ⌘Z is the
+     browser's own undo, and taking that away to restore a different comment
+     would be the more surprising of the two. */
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && !e.shiftKey && undone) {
+    e.preventDefault();
+    undoDelete();
+    return;
+  }
   // Not before the `typing` guard: ctrl+h/k are macOS text-editing bindings and
   // comment textareas need them more than pane switching does.
   if (e.ctrlKey && !e.metaKey && !e.altKey && PANE_DIR[e.key]) {
@@ -2589,11 +2774,20 @@ document.addEventListener("keydown", (e) => {
     case "p":
       jumpChange(-1);
       break;
+    case "]":
+      jumpComment(1);
+      break;
+    case "[":
+      jumpComment(-1);
+      break;
     case "s":
       setView(S.view === "split" ? "unified" : "split");
       break;
     case "f":
       setFullOnCurrent(!isFull(S.selFile));
+      break;
+    case "w":
+      setIgnoreWs(!S.ignoreWs);
       break;
     case "v":
       toggleViewed(!isViewed(S.selFile));
@@ -2630,6 +2824,7 @@ document.addEventListener("keydown", (e) => {
   loadDraft();
   render();
   await loadCommits(false); // the initial scope below owns what gets shown
+  if (await resumeWhere()) return;
   await setScope({ type: "worktree" }, "Local Changes");
   if (!S.files.length && S.ov.base) {
     await setScope({ type: "range", base: S.ov.base.ref, head: "HEAD" }, "Branch");

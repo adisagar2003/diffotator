@@ -50,13 +50,17 @@
             <button id="segSplit" class="seg-btn active">Split</button>
             <button id="segUnified" class="seg-btn">Unified</button>
           </div>
+          <div class="seg">
+            <button id="segWs" class="seg-btn" title="Ignore whitespace-only changes (w)">Ignore ␣</button>
+          </div>
         </div>
       </div>
 
       <div id="panes">
         <div id="leftPane">
           <div class="filter-row">
-            <input id="fileFilter" class="filter" placeholder="Filter files…" spellcheck="false">
+            <input id="fileFilter" class="filter" placeholder="Filter files… (try unviewed)" spellcheck="false"
+                   title="Substring of the path, plus the words: unviewed, viewed, commented, added, deleted, modified, renamed, untracked, binary, hidden. Prefix with ! to negate; terms are ANDed.">
             <div class="seg tiny">
               <button id="segList" class="seg-btn active" title="Flat list of files">List</button>
               <button id="segTree" class="seg-btn" title="Directory tree">Tree</button>
@@ -131,9 +135,16 @@
     <div id="modalList" class="modal-list"></div>
     <div class="modal-foot">
       <button id="modalCancel" class="btn ghost">Cancel</button>
+      <button id="modalCopy" class="btn ghost" title="Copy the exact markdown the agent would receive">Copy markdown</button>
       <button id="modalConfirm" class="btn primary">Send to agent</button>
     </div>
   </div>
+</div>
+
+<!-- undo toast: a deleted comment is unsent work, and delete has no dialog -->
+<div id="toast" class="toast" hidden>
+  <span id="toastText"></span>
+  <button id="toastUndo" class="linkish">Undo <kbd>⌘Z</kbd></button>
 </div>
 
 <div id="done" class="done" hidden>
@@ -151,16 +162,19 @@
       <tr><td><kbd>⌃h</kbd> <kbd>⌃j</kbd> <kbd>⌃k</kbd> <kbd>⌃l</kbd></td><td>move between panes (⌃ + arrows too)</td></tr>
       <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous file</td></tr>
       <tr><td><kbd>n</kbd> / <kbd>p</kbd></td><td>next / previous change</td></tr>
+      <tr><td><kbd>]</kbd> / <kbd>[</kbd></td><td>next / previous comment</td></tr>
       <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>move the line cursor</td></tr>
       <tr><td><kbd>c</kbd></td><td>comment on focused line</td></tr>
       <tr><td><kbd>⌘F</kbd></td><td>find in the diff — every file in the stream</td></tr>
       <tr><td><kbd>s</kbd></td><td>split / unified</td></tr>
       <tr><td><kbd>f</kbd></td><td>full file / diff only</td></tr>
+      <tr><td><kbd>w</kbd></td><td>ignore whitespace-only changes</td></tr>
       <tr><td><kbd>v</kbd></td><td>mark viewed &amp; go to next unviewed</td></tr>
       <tr><td><kbd>t</kbd></td><td>toggle comments panel</td></tr>
       <tr><td><kbd>b</kbd></td><td>toggle sidebar</td></tr>
-      <tr><td><kbd>/</kbd></td><td>filter files</td></tr>
+      <tr><td><kbd>/</kbd></td><td>filter files — a path substring, or <code>unviewed</code>, <code>commented</code>, <code>added</code>, <code>deleted</code>, <code>modified</code>, <code>renamed</code>, <code>untracked</code>, <code>binary</code>, <code>hidden</code>; <code>!</code> negates</td></tr>
       <tr><td><kbd>⌘⏎</kbd></td><td>save comment / send feedback</td></tr>
+      <tr><td><kbd>⌘Z</kbd></td><td>undo the last deleted comment</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>close popover, dialog or filter</td></tr>
     </table>
     <div class="modal-foot"><div class="grow"></div><button id="helpClose" class="btn primary">Got it</button></div>

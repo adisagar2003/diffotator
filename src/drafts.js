@@ -44,16 +44,48 @@ function writeJson(file, value) {
   }
 }
 
-/** @returns {{ann: object[], viewed: string[], desel: string[], collapsed: string[]}|null} */
+/**
+ * `where` is the reading position — which scope, which file — so a review that
+ * is reopened (the Stop hook fires again, the browser was closed) comes back
+ * where it was left rather than at the top of the first file. Kept small and
+ * string-only on purpose: it is a hint for the next session, and a hint that
+ * cannot be honoured has to be discarded silently.
+ *
+ * @returns {{ann: object[], viewed: string[], desel: string[], collapsed: string[], where: object|null}|null}
+ */
 function loadDraft(root) {
   const d = readJson(fileFor(root, "drafts"));
   if (!d || d.root !== root) return null;
-  return { ann: d.ann || [], viewed: d.viewed || [], desel: d.desel || [], collapsed: d.collapsed || [] };
+  return {
+    ann: d.ann || [],
+    viewed: d.viewed || [],
+    desel: d.desel || [],
+    collapsed: d.collapsed || [],
+    where: where(d.where),
+  };
 }
 
-function saveDraft(root, { ann = [], viewed = [], desel = [], collapsed = [] } = {}) {
+/** Strings only, and short ones — the rest of the draft is the reviewer's work,
+    this is a bookmark. */
+function where(w) {
+  if (!w || typeof w !== "object") return null;
+  const str = (v) => (typeof v === "string" && v.length <= 512 ? v : null);
+  const scope = str(w.scope);
+  return scope ? { scope, name: str(w.name), file: str(w.file) } : null;
+}
+
+function saveDraft(root, { ann = [], viewed = [], desel = [], collapsed = [] , where: w } = {}) {
+  // A bookmark on its own is not work worth keeping a file for.
   if (!ann.length && !viewed.length && !desel.length && !collapsed.length) return clearDraft(root);
-  return writeJson(fileFor(root, "drafts"), { root, ann, viewed, desel, collapsed, at: Date.now() });
+  return writeJson(fileFor(root, "drafts"), {
+    root,
+    ann,
+    viewed,
+    desel,
+    collapsed,
+    where: where(w),
+    at: Date.now(),
+  });
 }
 
 function clearDraft(root) {

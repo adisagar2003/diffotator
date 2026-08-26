@@ -44,6 +44,30 @@ assert.ok(
   assert.ok(out.includes("Looks close."), "summary included");
 }
 
+/* A comment about the file as a whole — "this module should not exist",
+   "these tests belong next to the code". It carries no line, and rendering it
+   as `file:null` / `Lnull` was the reason the UI could not offer one. */
+{
+  const out = render({
+    decision: "annotated",
+    repo: "demo",
+    scope: { type: "worktree" },
+    annotations: [
+      { file: "a.ts", side: "new", line: 12, label: "nit", body: "rename this" },
+      { file: "a.ts", side: "file", line: null, label: "issue", blocking: true, body: "this module should not exist" },
+    ],
+  });
+  assert.ok(out.includes("### a.ts — issue (blocking)"), "no line, no line suffix");
+  assert.ok(out.includes("*the whole file*"), "…and it says what it is about instead");
+  assert.ok(!out.includes("null"), "nothing renders the absent line");
+  assert.ok(
+    out.indexOf("this module should not exist") < out.indexOf("rename this"),
+    "the file-level comment comes first — it is the one to read before the line notes"
+  );
+  // An old-side note is a note about one image of a line; a file has no sides.
+  assert.ok(!out.includes("(old side)"));
+}
+
 // A comment tagged with the commit it was written against says so on its
 // location line; untagged comments render exactly as before.
 {
@@ -134,6 +158,22 @@ assert.ok(
   assert.strictEqual(esc('a "b" c'), "a &quot;b&quot; c", "quotes are escaped for attribute interpolation");
   assert.ok(!highlight('</div>"', "html").includes("<div"), "markup in source cannot break out");
   delete global.window;
+}
+
+// --- undoing a deleted comment ---------------------------------------------
+{
+  const [a, b, c] = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const list = [a, b, c];
+  // The comments panel and the send dialog are ordered by this list: a comment
+  // that comes back at the end reads as a second accident, not a fix.
+  assert.deepStrictEqual(RM.insertAt([a, c], b, 1), [a, b, c], "the middle one goes back in the middle");
+  assert.deepStrictEqual(RM.insertAt([b, c], a, 0), [a, b, c]);
+  assert.deepStrictEqual(RM.insertAt([a, b], c, 2), [a, b, c]);
+  // The list moves on while a toast is up — other comments can be written or
+  // deleted before the undo lands — so the index has to be survivable.
+  assert.deepStrictEqual(RM.insertAt([a], c, 7), [a, c], "an index past the end lands at the end");
+  assert.deepStrictEqual(RM.insertAt([], a, -3), [a]);
+  assert.deepStrictEqual(list, [a, b, c], "…and the original list is never mutated");
 }
 
 /* --- review model ----------------------------------------------------------
@@ -289,6 +329,32 @@ assert.ok(
   assert.strictEqual(RM.computeGraph([{ sha: "A", parents: [] }]).maxLanes, 1, "a lone commit needs one lane");
 }
 
+// --- walking the comments ---------------------------------------------------
+{
+  const items = [
+    { k: "fileHeader", f: "a.js" },
+    { k: "row" },
+    { k: "comment", a: { id: "1" }, f: "a.js" },
+    { k: "row" },
+    { k: "fileHeader", f: "b.js" },
+    { k: "comment", a: { id: "2" }, f: "b.js" },
+  ];
+  assert.strictEqual(RM.findComment(items, 0, 1), 2, "forwards from the top finds the first");
+  assert.strictEqual(RM.findComment(items, 2, 1), 5, "…then the next, across a file boundary");
+  assert.strictEqual(RM.findComment(items, 5, -1), 2);
+  // Small, finite set: running off the end and stopping is worse than coming
+  // back round.
+  assert.strictEqual(RM.findComment(items, 5, 1), 2, "forwards past the last wraps to the first");
+  assert.strictEqual(RM.findComment(items, 0, -1), 5, "backwards before the first wraps to the last");
+  // A jump that does not move is worse than no jump: with one comment, the
+  // only answer from on top of it is itself.
+  const one = [{ k: "row" }, { k: "comment", a: { id: "1" } }];
+  assert.strictEqual(RM.findComment(one, 0, 1), 1);
+  assert.strictEqual(RM.findComment(one, 1, 1), 1, "one comment answers itself rather than nothing");
+  assert.strictEqual(RM.findComment([{ k: "row" }, { k: "fileHeader" }], 0, 1), -1, "nothing to visit");
+  assert.strictEqual(RM.findComment([], 0, -1), -1);
+}
+
 /* --- sidebar ---------------------------------------------------------------
    What the sidebar claims: one highlighted row wherever you are, and badges
    that agree with the rows underneath them. Both were HTML strings in app.js,
@@ -336,6 +402,40 @@ assert.ok(
   // Files stream in while a search is open, so the hit list grows underneath a
   // stale index rather than staying still.
   assert.strictEqual(sum([0], 7, "x"), "1/1 · src/server.js", "an index past the end clamps, not crashes");
+// --- file filter grammar ----------------------------------------------------
+{
+  const m = (q, f) => RM.matchFile(RM.parseFilter(q), f);
+  const src = { path: "src/server.js", status: "modified", viewed: false, comments: 0, selected: true };
+  const seen = { path: "web/app.js", status: "modified", viewed: true, comments: 2, selected: true };
+  const gone = { path: "old/dead.js", status: "deleted", viewed: false, comments: 0, selected: false };
+
+  // The thing it always did still works, and an empty box hides nothing.
+  assert.ok(m("server", src) && !m("server", seen), "a bare term is still a path substring");
+  assert.ok(m("", gone) && m("   ", gone), "an empty filter is not a filter");
+  assert.ok(m("SERVER", src), "matching is case-insensitive, as the box always was");
+
+  // The two questions a reviewer actually asks halfway through.
+  assert.ok(m("unviewed", src) && !m("unviewed", seen));
+  assert.ok(m("commented", seen) && !m("commented", src));
+
+  // Terms are ANDed, and `!` negates one of them.
+  assert.ok(m("web viewed", seen) && !m("src viewed", seen), "every term has to match");
+  assert.ok(m("!viewed", src) && !m("!viewed", seen));
+  assert.ok(!m("!web", seen), "negation applies to plain substrings too");
+  assert.ok(m("deleted", gone) && !m("deleted", src));
+  assert.ok(m("hidden", gone) && !m("hidden", src), "hidden means out of the stream, not deleted");
+
+  // An untracked file is an addition — that is what the reviewer means by it —
+  // without losing the narrower word.
+  const fresh = { path: "new.txt", status: "untracked" };
+  assert.ok(m("added", fresh) && m("untracked", fresh));
+  assert.ok(!m("untracked", { path: "a.js", status: "added" }), "…but not the other way round");
+
+  // The File Tree tab lists paths the change never touched: no meta at all.
+  const untouched = { path: "docs/readme.md" };
+  assert.ok(m("docs", untouched), "a path with no status still matches on its path");
+  assert.ok(!m("modified", untouched), "…and a word about a status it lacks excludes it");
+  assert.ok(m("unviewed", untouched), "…while 'not read yet' is true of everything unread");
 }
 
 // --- buildStream: many files, one windowed list ----------------------------
@@ -383,6 +483,24 @@ assert.ok(
   assert.strictEqual(out.items[segC.start + 1].k, "loading", "unloaded file holds a placeholder row");
   assert.strictEqual(RM.itemHeight(out.items[0]), RM.GEOM.fileHeader, "header height is fixed");
   assert.strictEqual(RM.itemHeight(out.items[segC.start + 1]), RM.GEOM.row, "loading row is row-height");
+
+  /* A comment about the file itself hangs off its header: buildItems threads
+     comments under the line they name, and this one names none. */
+  {
+    const fileCmt = { id: "f1", file: "a.js", side: "file", line: null, label: "issue", body: "delete this module" };
+    const withFile = RM.buildStream({ ...base, annotations: [fileCmt] });
+    assert.strictEqual(withFile.items[0].k, "fileHeader");
+    assert.strictEqual(withFile.items[1].k, "comment", "the card sits directly under its file's header");
+    assert.strictEqual(withFile.items[1].a.id, "f1");
+    assert.strictEqual(
+      withFile.items.filter((i) => i.k === "comment").length,
+      1,
+      "…once, not once per line it does not name"
+    );
+    // Folded with the file, like everything else about it.
+    const folded = RM.buildStream({ ...base, annotations: [fileCmt], collapsed: new Set(["a.js"]) });
+    assert.strictEqual(folded.segments[0].end - folded.segments[0].start, 1, "a collapsed file is still header-only");
+  }
 
   // collapse: segment folds to its header
   const col = RM.buildStream({ ...base, collapsed: new Set(["a.js"]) });
@@ -827,6 +945,7 @@ fs.writeFileSync(path.join(dir, "new.txt"), "hello\n");
   fs.rmSync(dir, { recursive: true, force: true });
   await awkwardShapes();
   await gitFidelity();
+  await whitespaceOnly();
   await draftsAndHook();
   await scopeKinds();
   await brokenAndEmptyRepos();
@@ -926,6 +1045,43 @@ async function awkwardShapes() {
    endings, the missing final newline, the file mode, and which revision a
    detached worktree is actually on. A reviewer who cannot see them is being
    shown a change that reads as no change. */
+/* `-w` has one interesting failure: a tracked file whose only change is
+   whitespace diffs to nothing under it, which looks exactly like an untracked
+   file — and untracked files get synthesised as an all-add of the whole file.
+   Getting that wrong turns "nothing changed" into "everything is new". */
+async function whitespaceOnly() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-ws-"));
+  const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "pipe" }).toString();
+  g("init", "-q", "-b", "main");
+  g("config", "user.email", "t@t.t");
+  g("config", "user.name", "T");
+  fs.writeFileSync(path.join(d, "re.js"), "function f() {\nreturn 1;\n}\n");
+  g("add", "-A");
+  g("commit", "-qm", "root");
+  fs.writeFileSync(path.join(d, "re.js"), "function f() {\n  return 1;\n}\n");
+  fs.writeFileSync(path.join(d, "fresh.txt"), "brand new\n");
+
+  const root = await G.repoRoot(d);
+  const wt = { type: "worktree" };
+
+  const plain = await G.fileDiff(root, wt, "re.js");
+  assert.ok(
+    plain.rows.some((r) => r.t === "add") && plain.rows.some((r) => r.t === "del"),
+    "the reindent is a real diff when whitespace counts"
+  );
+
+  const ignored = await G.fileDiff(root, wt, "re.js", undefined, true);
+  assert.deepStrictEqual(ignored.rows, [], "…and no diff at all when it does not");
+  assert.ok(ignored.empty, "an ignored-away diff reports itself empty, not binary or broken");
+
+  // The regression the guard above exists for.
+  const untracked = await G.fileDiff(root, wt, "fresh.txt", undefined, true);
+  assert.strictEqual(untracked.rows.length, 1, "an untracked file still renders under -w");
+  assert.strictEqual(untracked.rows[0].t, "add");
+
+  fs.rmSync(d, { recursive: true, force: true });
+}
+
 async function gitFidelity() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-fidelity-"));
   const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "pipe" }).toString();
@@ -1057,6 +1213,32 @@ async function draftsAndHook() {
   assert.deepStrictEqual(back.viewed, ["worktree|a.ts"], "viewed state round-trips");
   D.clearDraft(root);
   assert.strictEqual(D.loadDraft(root), null, "submitting clears the draft");
+
+  /* The reading position: which scope, which file, so a review reopened by the
+     next hook fire comes back where it was left. A bookmark, not work — it is
+     validated hard and dropped silently when it cannot be trusted. */
+  const withWhere = (w) => {
+    D.saveDraft(root, { ann: [{ id: "a1", file: "a.ts", line: 1, body: "hm" }], where: w });
+    return D.loadDraft(root).where;
+  };
+  assert.deepStrictEqual(
+    withWhere({ scope: "range:origin/main...HEAD", name: "Branch", file: "src/a.ts" }),
+    { scope: "range:origin/main...HEAD", name: "Branch", file: "src/a.ts" },
+    "the position round-trips"
+  );
+  assert.strictEqual(withWhere({ name: "Branch" }), null, "…but not without a scope to resume into");
+  assert.deepStrictEqual(withWhere({ scope: "worktree", file: 42 }), { scope: "worktree", name: null, file: null },
+    "a non-string is dropped, not stored and handed back as a path");
+  assert.strictEqual(withWhere({ scope: "x".repeat(600) }), null, "…and neither is an unreasonable one");
+  assert.strictEqual(withWhere("worktree"), null, "a string where an object belongs is not a position");
+  assert.strictEqual(withWhere(undefined), null, "a draft written before positions existed still loads");
+
+  // A position on its own is not work worth keeping a file for.
+  D.clearDraft(root);
+  D.saveDraft(root, { where: { scope: "worktree", file: "a.ts" } });
+  assert.strictEqual(D.loadDraft(root), null, "a bookmark with nothing bookmarked writes nothing");
+
+  D.clearDraft(root);
 
   // --- the gate ------------------------------------------------------------
   const at = (input, opts) => H.decide({ cwd: d, ...input }, opts);
@@ -1384,6 +1566,33 @@ async function httpSurface() {
   assert.strictEqual(await status("/review-model.js"), 200);
   assert.strictEqual(await status("/keys.js"), 200, "…and the keyboard policy it shares with the page");
   assert.strictEqual(await status("/%2e%2e%2fpackage.json"), 404, "static serving stays inside web/");
+
+  /* Preview renders exactly what Send would, and — the whole point — leaves
+     the session alone: nothing submitted, no draft cleared. */
+  const post = (path, payload) =>
+    json(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  const review = {
+    decision: "annotated",
+    // Deliberately not the summary the real submit below sends: if preview
+    // ever resolved the session promise, that assertion would read this back.
+    summary: "draft only, never sent",
+    scope: { type: "worktree" },
+    annotations: [{ file: "a.ts", side: "new", line: 1, label: "issue", blocking: true, body: "null deref" }],
+  };
+  const preview = (await post("/api/preview", review)).markdown;
+  assert.ok(preview.includes("null deref") && preview.includes("1 blocking comment"));
+  assert.ok(preview.includes("draft only, never sent"));
+  assert.ok(preview.includes("working tree vs HEAD"), "one renderer, so the scope label is the same one");
+  assert.strictEqual(
+    (await post("/api/preview", { decision: "annotated", annotations: [], summary: "" })).markdown,
+    "",
+    "nothing written renders to nothing — the button has something to refuse"
+  );
+  assert.strictEqual(await status("/api/preview"), 404, "…and it is a POST, like every other mutation-shaped route");
 
   // Submitting resolves the session promise; the server never touches teardown.
   assert.deepStrictEqual(

@@ -244,6 +244,14 @@
         idx: idx++,
         count: shown.length,
       });
+      /* A comment about the file itself hangs off its header rather than off a
+         line — buildItems threads comments under the line they name, and this
+         one names none. Folded with the file, like everything else about it. */
+      if (!collapsed.has(f.path)) {
+        for (const a of annotations) {
+          if (a.file === f.path && a.line == null) items.push({ k: "comment", a, f: f.path });
+        }
+      }
       if (!collapsed.has(f.path)) {
         if (!st.loaded) {
           items.push({ k: "loading", f: f.path });
@@ -364,6 +372,29 @@
     while (i >= 0 && !isChangeRow(items[i])) i--;
     while (i > 0 && isChangeRow(items[i - 1])) i--;
     return i >= 0 ? i : -1;
+  }
+
+  /**
+   * The next comment card in the stream, wrapping. `n`/`p` walk changes, which
+   * is how you read a review the first time; this is how you walk it the
+   * second time — over what you already said, to check it still makes sense
+   * before sending. Wrapping is deliberate: the set is small and finite, so
+   * running off the end and stopping is worse than coming back round.
+   *
+   * Returns -1 when there is nothing to visit, which includes "the only
+   * comment is the one already under the cursor" — moving nowhere and saying
+   * nothing beats a jump that does not move.
+   */
+  function findComment(items, from, dir) {
+    const idx = [];
+    for (let i = 0; i < items.length; i++) if (items[i] && items[i].k === "comment") idx.push(i);
+    if (!idx.length) return -1;
+    if (dir > 0) {
+      const next = idx.find((i) => i > from);
+      return next == null ? idx[0] : next;
+    }
+    const prev = [...idx].reverse().find((i) => i < from);
+    return prev == null ? idx[idx.length - 1] : prev;
   }
 
   /**
@@ -626,11 +657,82 @@
     };
   }
 
+  // --- file filter ---------------------------------------------------------
+
+  /**
+   * The filter box used to answer exactly one question — "does the path
+   * contain this?" — while the questions a reviewer actually asks halfway
+   * through are "what have I not read yet?" and "where did I leave comments?".
+   * Both were answerable only by scrolling the list and squinting at ticks.
+   *
+   * The grammar is deliberately tiny: whitespace-separated terms, all of which
+   * must match, `!` negates one, and a term that is not a known word is what
+   * the box always did — a substring of the path. So `src !viewed` still reads
+   * as English, and nobody has to learn anything to keep typing `server`.
+   */
+  const FILTER_WORDS = {
+    viewed: (f) => !!f.viewed,
+    unviewed: (f) => !f.viewed,
+    commented: (f) => (f.comments || 0) > 0,
+    hidden: (f) => f.selected === false, // out of the stream, per the eye toggle
+    added: (f) => f.status === "added" || f.status === "untracked",
+    untracked: (f) => f.status === "untracked",
+    deleted: (f) => f.status === "deleted",
+    modified: (f) => f.status === "modified",
+    renamed: (f) => f.status === "renamed",
+    binary: (f) => !!f.binary,
+  };
+
+  /** Terms, pre-resolved. Parsing once per keystroke beats once per row. */
+  function parseFilter(q) {
+    const terms = [];
+    for (const raw of String(q || "").trim().split(/\s+/)) {
+      if (!raw) continue;
+      const neg = raw[0] === "!";
+      const word = (neg ? raw.slice(1) : raw).toLowerCase();
+      if (!word) continue;
+      const test = FILTER_WORDS[word];
+      terms.push(test ? { neg, test } : { neg, text: word });
+    }
+    return terms;
+  }
+
+  /**
+   * `file` is `{path, status, viewed, comments, selected, binary}`. Everything
+   * but `path` is optional — the File Tree tab lists paths the change never
+   * touched, and a word about a status they do not have simply excludes them.
+   */
+  function matchFile(terms, file) {
+    const path = String((file && file.path) || "").toLowerCase();
+    for (const t of terms) {
+      const hit = t.test ? t.test(file || {}) : path.includes(t.text);
+      if (hit === t.neg) return false;
+    }
+    return true;
+  }
+
+  exp.FILTER_WORDS = Object.keys(FILTER_WORDS);
+  exp.parseFilter = parseFilter;
+  exp.matchFile = matchFile;
+
   exp.GEOM = GEOM;
   exp.timelineRows = timelineRows;
   exp.timelineScope = timelineScope;
   exp.annCommit = annCommit;
   exp.annKey = annKey;
+  /**
+   * Put a removed comment back where it was. The comments panel and the send
+   * dialog are ordered by this list, so an undo that appends would quietly
+   * reorder the review — the comment comes back, but somewhere else, which
+   * reads as a second accident rather than the fix for the first.
+   */
+  function insertAt(list, item, i) {
+    const out = (list || []).slice();
+    out.splice(Math.max(0, Math.min(i, out.length)), 0, item);
+    return out;
+  }
+
+  exp.insertAt = insertAt;
   exp.annIndex = annIndex;
   exp.commentLines = commentLines;
   exp.itemHeight = itemHeight;
@@ -640,6 +742,7 @@
   exp.rowLine = rowLine;
   exp.rowIndexFor = rowIndexFor;
   exp.findChange = findChange;
+  exp.findComment = findComment;
   exp.changeStarts = changeStarts;
   exp.focusStep = focusStep;
   exp.searchHits = searchHits;
