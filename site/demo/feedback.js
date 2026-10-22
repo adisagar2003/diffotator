@@ -1,0 +1,113 @@
+(function(){var module={exports:{}};var require=function(){return window.Scope};
+"use strict";
+const Scope = require("./scope");
+
+// Conventional Comments (https://conventionalcomments.org) — same vocabulary
+// Plannotator uses, so agent-side handling is identical.
+const LABELS = ["suggestion", "nit", "question", "issue", "praise", "thought", "note", "todo", "chore"];
+
+/**
+ * Render annotations as markdown the agent can act on directly.
+ * Grouped by file, ordered by line, blocking items called out.
+ */
+function render({ annotations = [], summary = "", decision = "annotated", scope, repo }) {
+  if (decision === "dismissed") {
+    return "Review session closed without feedback.";
+  }
+  // Nothing written is nothing to send, whichever button we arrived by. An
+  // empty `annotated` used to render the whole scaffold around zero comments:
+  // "0 comments" under "address every comment above".
+  if (!annotations.length && !summary.trim()) {
+    return decision === "approved" ? "The user approved." : "";
+  }
+
+  const out = [];
+  out.push("# Code review feedback");
+  out.push("");
+  out.push(
+    `Reviewed \`${repo || "repository"}\` — ${Scope.label(scope)}. ` +
+      `${annotations.length} comment${annotations.length === 1 ? "" : "s"}.`
+  );
+
+  if (summary.trim()) {
+    out.push("");
+    out.push("## Overall");
+    out.push("");
+    out.push(summary.trim());
+  }
+
+  const blocking = annotations.filter((a) => a.blocking);
+  if (blocking.length) {
+    out.push("");
+    out.push(
+      `> **${blocking.length} blocking comment${blocking.length === 1 ? "" : "s"}** — these must be resolved.`
+    );
+  }
+
+  const byFile = new Map();
+  for (const a of annotations) {
+    const key = a.file || "(general)";
+    if (!byFile.has(key)) byFile.set(key, []);
+    byFile.get(key).push(a);
+  }
+
+  for (const [file, list] of byFile) {
+    // A comment about the file itself has no line, sorts to the top of its
+    // file, and is the one an agent should read before the line-by-line notes.
+    list.sort((a, b) => (a.line || 0) - (b.line || 0));
+    out.push("");
+    out.push(`## \`${file}\``);
+    for (const a of list) {
+      const label = LABELS.includes(a.label) ? a.label : "comment";
+      /* `line == null` is a comment about the file as a whole — "this module
+         should not exist", "these tests belong next to the code". Rendering it
+         as `file:null` and `Lnull` was the reason the UI could not offer one. */
+      const whole = a.line == null;
+      const loc = whole
+        ? "the whole file"
+        : a.endLine && a.endLine !== a.line
+        ? `L${a.line}-L${a.endLine}`
+        : `L${a.line}`;
+      const side = whole || a.side !== "old" ? "" : " (old side)";
+      out.push("");
+      out.push(`### ${file}${whole ? "" : ":" + a.line} — ${label}${a.blocking ? " (blocking)" : ""}`);
+      out.push("");
+      // A comment written against one commit's diff says so: the line anchor
+      // belongs to that diff, and the sha tells the agent which layer to fix
+      // (amend that commit vs. patch on top).
+      const commit = a.commit && a.commit.sha
+        ? ` — re: commit ${a.commit.short || a.commit.sha.slice(0, 7)}${a.commit.subject ? ` "${a.commit.subject}"` : ""}`
+        : "";
+      out.push(`*${loc}${side}${commit}*`);
+      if (a.code) {
+        out.push("");
+        out.push("```" + (a.lang || ""));
+        out.push(a.code);
+        out.push("```");
+      }
+      out.push("");
+      out.push((a.body || "").trim() || "_(no comment text)_");
+      if (a.suggestion && a.suggestion.trim()) {
+        out.push("");
+        out.push("Suggested replacement:");
+        out.push("");
+        out.push("```" + (a.lang || "suggestion"));
+        out.push(a.suggestion.replace(/\n+$/, ""));
+        out.push("```");
+      }
+    }
+  }
+
+  out.push("");
+  out.push("---");
+  out.push("");
+  out.push(
+    "Address every comment above. For each one, either make the change or explain why not. " +
+      "Blocking comments must be resolved before proceeding."
+  );
+  return out.join("\n");
+}
+
+module.exports = { render, LABELS };
+
+window.Feedback=module.exports;})();
