@@ -7,11 +7,12 @@ const G = require("./git");
 const Scope = require("./scope");
 const { render } = require("./feedback");
 const D = require("./drafts");
+const W = require("./walkthrough");
 
 const WEB = path.join(__dirname, "..", "web");
 // The scope vocabulary is shared with the browser, so it is served out of src
 // rather than duplicated into web/.
-const SHARED = { "/scope.js": path.join(__dirname, "scope.js") };
+const SHARED = { "/scope.js": path.join(__dirname, "scope.js"), "/walkthrough.js": path.join(__dirname, "walkthrough.js") };
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -73,11 +74,25 @@ function serveStatic(p, res) {
  * most endpoints have no scope to validate), `body()`, `submit(result)`.
  */
 const ROUTES = {
-  "GET /api/overview": async ({ root, title, base }) => ({
+  "GET /api/overview": async ({ root, title, base, walkthrough }) => ({
     ...(await G.overview(root, { base })),
     title,
+    walkthrough: !!walkthrough,
     draft: D.loadDraft(root),
   }),
+
+  /* Read on every request, not once at start: the agent may still be writing
+     the file when the page first asks, and a rewrite should show on reload.
+     Whatever the file says is repaired against this scope's changed files. */
+  "GET /api/walkthrough": async ({ root, scope, walkthrough }) => {
+    const paths = (await G.changedFiles(root, scope)).map((f) => f.path);
+    if (!walkthrough) return W.validate(null, paths);
+    try {
+      return W.validate(JSON.parse(fs.readFileSync(walkthrough, "utf8")), paths);
+    } catch (e) {
+      return W.validate(null, paths, `Couldn't read the walkthrough file: ${e.message}`);
+    }
+  },
 
   "POST /api/draft": async ({ root, body }) => {
     D.saveDraft(root, await body());
@@ -153,11 +168,12 @@ const ROUTES = {
  * @param {string} opts.root   repo root
  * @param {string} [opts.title] header title for the session
  * @param {string} [opts.base] forced base ref for the branch-vs-base scope
+ * @param {string} [opts.walkthrough] path of the agent-written walkthrough JSON
  * @returns {http.Server} with an extra `submitted` promise that resolves to
  *   `{decision, output}` when the reviewer submits. The caller owns teardown
  *   and process exit — this module knows nothing about either.
  */
-function createServer({ root, title, base }) {
+function createServer({ root, title, base, walkthrough }) {
   let onSubmit;
   const submitted = new Promise((resolve) => (onSubmit = resolve));
 
@@ -175,6 +191,7 @@ function createServer({ root, title, base }) {
             root,
             title,
             base,
+            walkthrough,
             q,
             body: () => readBody(req),
             submit: onSubmit,

@@ -23,6 +23,9 @@ Options:
   -p, --port <n>      Port to listen on (default: random free port)
       --no-open       Do not launch a browser
       --title <s>     Header title for the session
+      --walkthrough <path>
+                      Walkthrough JSON written by the agent (see /diffotator).
+                      Opens on the branch-vs-base range.
   -h, --help
 
 Stop hook:
@@ -47,6 +50,14 @@ function parseArgs(argv) {
     else if (a === "-b" || a === "--base") o.base = argv[++i];
     else if (a === "-p" || a === "--port") o.port = +argv[++i];
     else if (a === "--title") o.title = argv[++i];
+    else if (a === "--walkthrough") {
+      const v = argv[++i];
+      if (!v || v.startsWith("-")) {
+        process.stderr.write("diffotator: --walkthrough needs a file path\n");
+        process.exit(1);
+      }
+      o.walkthrough = path.resolve(v);
+    }
     else if (a === "--no-open") o.open = false;
     else rest.push(a);
   }
@@ -69,8 +80,8 @@ const PAINT_MS = 400;
  * and the teardown — the HTTP module only reports that a decision arrived.
  * @returns {Promise<{decision: string, output: string}>}
  */
-function serveReview(root, { open = true, port = 0, title, base } = {}) {
-  const server = createServer({ root, title, base });
+function serveReview(root, { open = true, port = 0, title, base, walkthrough } = {}) {
+  const server = createServer({ root, title, base, walkthrough });
   return new Promise((resolve) => {
     const finish = (result) => {
       setTimeout(() => server.close(() => resolve(result)), PAINT_MS);
@@ -154,6 +165,7 @@ async function main() {
     port: opts.port || 0,
     title: opts.title,
     base: opts.base,
+    walkthrough: opts.walkthrough,
   });
   if (output) process.stdout.write(output.endsWith("\n") ? output : output + "\n");
   process.exit(0);

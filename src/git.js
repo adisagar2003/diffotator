@@ -461,6 +461,7 @@ async function fileContent(root, scope, file) {
   let text = null;
   if (Scope.isWorktree(scope)) {
     const abs = path.join(root, file);
+    if (!abs.startsWith(root + path.sep)) return { error: "outside the repository" };
     if (fs.existsSync(abs)) {
       const st = fs.statSync(abs);
       if (st.size > MAX_BLOB) return { tooBig: true };
