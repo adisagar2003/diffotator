@@ -64,21 +64,44 @@ agent acts on. Same contract as [Plannotator](https://plannotator.ai), without t
 
 ## Install
 
+Works the same on macOS, Linux and Windows. You need Node 18+ and git.
+
+### Option 1 — npm (recommended)
+
 ```sh
 npm install -g diffotator
 diffotator setup             # teaches your agent the /diffotator command
-diffotator hook --install    # optional: auto-review, below
 ```
 
-Works the same on macOS, Linux and Windows; Node 18+ and git are all it needs.
-`diffotator setup` installs the command for Claude Code and prints the file to add
-to any other agent's instructions. To upgrade: `npm update -g diffotator && diffotator setup`.
-Just trying it? `npx diffotator` runs it without installing.
+Upgrade with `npm update -g diffotator`, then run `diffotator setup` again so your
+agent gets the new instructions. Just trying it? `npx diffotator` runs it without installing.
 
-From source: `git clone https://github.com/adisagar2003/diffotator.git && cd diffotator && npm link`.
-There are no runtime dependencies. The walkthrough map's React,
-React Flow and ELK ship prebuilt in `web/vendor/` (rebuild with
-`scripts/build-vendor.sh` after editing `vendor-src/`). `node test.js` runs the checks.
+### Option 2 — from source
+
+```sh
+git clone https://github.com/adisagar2003/diffotator.git
+cd diffotator
+npm link                     # puts the diffotator command on your PATH
+diffotator setup
+```
+
+Upgrade with `git pull`, then `diffotator setup` again. Pick this to read the code,
+try unreleased changes, or send a pull request. `node test.js` runs the checks.
+
+### Then
+
+`diffotator setup` installs the command for Claude Code and prints the instructions file
+to add to any other agent's rules. Then ask your agent:
+
+```text
+use diffotator to review <pull request link>
+```
+
+Optional: `diffotator hook --install` opens a review on its own after every agent turn
+(see [Reviews that fire by themselves](#reviews-that-fire-by-themselves)).
+
+There are no runtime dependencies. The walkthrough map's React, React Flow and ELK ship
+prebuilt in `web/vendor/` (rebuild with `scripts/build-vendor.sh` after editing `vendor-src/`).
 
 ## Use
 
