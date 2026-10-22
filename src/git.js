@@ -456,12 +456,23 @@ async function fileDiff(root, scope, file, context = 1000000, ignoreWs = false) 
   return parsed;
 }
 
+/**
+ * Whether repo-relative `file` stays inside `root`. Git prints the root with
+ * "/" even on Windows, where path.join answers with "\\", so both sides are
+ * resolved the same way before comparing. `p` is there so tests can ask as Windows.
+ */
+function insideRepo(root, file, p = path) {
+  const r = p.resolve(root);
+  const abs = p.resolve(r, file);
+  return abs.startsWith(r.endsWith(p.sep) ? r : r + p.sep);
+}
+
 /** Whole-file content at a scope's "after" side — for reviewing untouched files. */
 async function fileContent(root, scope, file) {
   let text = null;
   if (Scope.isWorktree(scope)) {
-    const abs = path.join(root, file);
-    if (!abs.startsWith(root + path.sep)) return { error: "outside the repository" };
+    if (!insideRepo(root, file)) return { error: "outside the repository" };
+    const abs = path.resolve(root, file);
     if (fs.existsSync(abs)) {
       const st = fs.statSync(abs);
       if (st.size > MAX_BLOB) return { tooBig: true };
@@ -511,6 +522,7 @@ async function tree(root, scope) {
 
 module.exports = {
   git,
+  insideRepo,
   probe,
   repoRoot,
   overview,

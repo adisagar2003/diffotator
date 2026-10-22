@@ -1,11 +1,17 @@
 {
   "name": "diffotator",
-  "version": "2.0.0",
-  "description": "Review a big change as a walkthrough — summary, domain background and a map of the change — then send line comments back to your Claude Code session.",
+  "version": "2.1.0",
+  "description": "Review a big change as a walkthrough — a summary, the words you need, and a map of the change — then send your comments back to your coding agent.",
+  "keywords": ["code-review", "diff", "git", "pull-request", "walkthrough", "coding-agent", "claude-code", "review-tool"],
+  "homepage": "https://diffotator.vercel.app",
+  "repository": { "type": "git", "url": "git+https://github.com/adisagar2003/diffotator.git" },
+  "bugs": { "url": "https://github.com/adisagar2003/diffotator/issues" },
+  "author": "Aditya Sagar",
+  "license": "MIT",
   "bin": { "diffotator": "bin/diffotator.js" },
   "main": "src/server.js",
   "type": "commonjs",
   "engines": { "node": ">=18" },
   "files": ["bin", "src", "web", "claude"],
-  "license": "MIT"
+  "scripts": { "test": "node test.js" }
 }

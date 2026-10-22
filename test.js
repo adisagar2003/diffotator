@@ -11,6 +11,7 @@ const Scope = require("./src/scope");
 const RM = require("./web/review-model");
 const { render } = require("./src/feedback");
 const W = require("./src/walkthrough");
+const P = require("./src/platform");
 
 // --- feedback rendering ----------------------------------------------------
 assert.strictEqual(render({ decision: "approved", annotations: [] }), "The user approved.");
@@ -245,6 +246,33 @@ assert.ok(
   assert.strictEqual(W.buildGraph(wt, { kind: "block", path: ["nope"] }, stats), null, "a stale route builds nothing");
   assert.strictEqual(W.testTag("apps/frontend/e2e/flows/x.spec.ts"), "E2E");
   assert.strictEqual(W.testTag("src/__tests__/rateHistory.helper.ts"), "HELP");
+}
+
+// --- platform: browser, repo paths, agent setup ---------------------------
+{
+  const url = "http://localhost:1234";
+  assert.deepStrictEqual(P.browserCommand("darwin", url), ["open", [url]]);
+  assert.deepStrictEqual(P.browserCommand("linux", url), ["xdg-open", [url]]);
+  assert.deepStrictEqual(P.browserCommand("win32", url), ["cmd", ["/c", "start", "", url]], "start is a cmd.exe built-in, not a program");
+  // git prints "C:/…" on Windows; path.win32 answers with backslashes
+  assert.strictEqual(G.insideRepo("C:/Users/me/repo", "src/a.ts", path.win32), true, "a repo file is inside, on Windows too");
+  assert.strictEqual(G.insideRepo("C:/Users/me/repo", "../secret.txt", path.win32), false);
+  assert.strictEqual(G.insideRepo("C:/Users/me/repo", "C:/Windows/win.ini", path.win32), false);
+  assert.strictEqual(G.insideRepo("C:/Users/me/repo", "src/../../repo2/x", path.win32), false, "a sibling folder sharing a prefix is outside");
+  assert.strictEqual(G.insideRepo("/home/me/repo", "docs/a.md", path.posix), true);
+  assert.strictEqual(G.insideRepo("/home/me/repo", "../../etc/passwd", path.posix), false);
+
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-home-"));
+  assert.deepStrictEqual(P.setupAgent({ home }), { installed: null, source: P.COMMAND_FILE }, "no Claude Code, nothing written");
+  assert.strictEqual(fs.existsSync(path.join(home, ".claude")), false);
+  fs.mkdirSync(path.join(home, ".claude"));
+  const done = P.setupAgent({ home });
+  assert.strictEqual(done.installed, path.join(home, ".claude", "commands", "diffotator.md"));
+  assert.strictEqual(fs.readFileSync(done.installed, "utf8"), fs.readFileSync(P.COMMAND_FILE, "utf8"));
+  fs.writeFileSync(done.installed, "old copy");
+  P.setupAgent({ home });
+  assert.strictEqual(fs.readFileSync(done.installed, "utf8"), fs.readFileSync(P.COMMAND_FILE, "utf8"), "running it again updates an older copy");
+  fs.rmSync(home, { recursive: true, force: true });
 }
 
 // --- vendored canvas bundle --------------------------------------------------

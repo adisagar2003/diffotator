@@ -9,8 +9,8 @@ domain words you need, and a map of the change you drill into like web pages.
 Under it sits a real git client. Your comments go straight back to Claude Code.
 
 [![docs](https://img.shields.io/badge/diffotator.vercel.app-4fae63?style=flat-square&label=docs)](https://diffotator.vercel.app)
-[![dependencies](https://img.shields.io/badge/install--time%20dependencies-0-4fae63?style=flat-square)](package.json)
-[![version](https://img.shields.io/badge/version-2.0.0-4a8cf7?style=flat-square)](https://github.com/adisagar2003/diffotator/releases)
+[![dependencies](https://img.shields.io/badge/dependencies-0-4fae63?style=flat-square)](package.json)
+[![npm](https://img.shields.io/npm/v/diffotator?style=flat-square&color=4a8cf7)](https://www.npmjs.com/package/diffotator)
 [![node](https://img.shields.io/badge/node-%E2%89%A518-666?style=flat-square)](package.json)
 [![license](https://img.shields.io/badge/license-MIT-666?style=flat-square)](#license)
 
@@ -64,17 +64,44 @@ agent acts on. Same contract as [Plannotator](https://plannotator.ai), without t
 
 ## Install
 
+Works the same on macOS, Linux and Windows. You need Node 18+ and git.
+
+### Option 1 — npm (recommended)
+
+```sh
+npm install -g diffotator
+diffotator setup             # teaches your agent the /diffotator command
+```
+
+Upgrade with `npm update -g diffotator`, then run `diffotator setup` again so your
+agent gets the new instructions. Just trying it? `npx diffotator` runs it without installing.
+
+### Option 2 — from source
+
 ```sh
 git clone https://github.com/adisagar2003/diffotator.git
 cd diffotator
-ln -sf "$PWD/bin/diffotator.js" ~/.local/bin/diffotator   # needs ~/.local/bin on PATH
-cp claude/diffotator.md ~/.claude/commands/diffotator.md  # the /diffotator command
-diffotator hook --install                                 # optional: auto-review, below
+npm link                     # puts the diffotator command on your PATH
+diffotator setup
 ```
 
-No `npm install`: Node 18+ and git are all it needs. The walkthrough map's React,
-React Flow and ELK ship prebuilt in `web/vendor/` (rebuild with
-`scripts/build-vendor.sh` after editing `vendor-src/`). `node test.js` runs the checks.
+Upgrade with `git pull`, then `diffotator setup` again. Pick this to read the code,
+try unreleased changes, or send a pull request. `node test.js` runs the checks.
+
+### Then
+
+`diffotator setup` installs the command for Claude Code and prints the instructions file
+to add to any other agent's rules. Then ask your agent:
+
+```text
+use diffotator to review <pull request link>
+```
+
+Optional: `diffotator hook --install` opens a review on its own after every agent turn
+(see [Reviews that fire by themselves](#reviews-that-fire-by-themselves)).
+
+There are no runtime dependencies. The walkthrough map's React, React Flow and ELK ship
+prebuilt in `web/vendor/` (rebuild with `scripts/build-vendor.sh` after editing `vendor-src/`).
 
 ## Use
 

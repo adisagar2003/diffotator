@@ -111,6 +111,11 @@ main section{padding:104px 24px;max-width:var(--wrap);margin:0 auto}
 
 /* ---------- install ---------- */
 .install .lead{margin:16px 0 30px}
+.tabs{display:inline-flex;gap:4px;padding:4px;margin-bottom:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.tabs button{border:0;border-radius:9px;padding:7px 16px;background:transparent;color:var(--dim);font:600 15px var(--ui);cursor:pointer;transition:background .15s var(--ease),color .15s var(--ease)}
+.tabs button:hover{color:var(--ink)}
+.tabs button[aria-selected="true"]{background:var(--elev);color:var(--ink);box-shadow:0 1px 0 #ffffff0d inset}
+[role="tabpanel"][hidden]{display:none}
 .code{position:relative;max-width:820px}
 .code pre{padding:20px 22px;font-size:15px}
 .code.one pre{color:var(--ink)}
