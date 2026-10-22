@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>diffotator — live demo</title>
+<link rel="stylesheet" href="vendor/canvas.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<script>
+  // The view from last time, before first paint, so Classic users see no walkthrough flash.
+  try { document.body.className = sessionStorage.getItem("diffotator.mode") === "classic" ? "mode-classic" : "mode-walk"; }
+  catch (e) { document.body.className = "mode-walk"; }
+</script>
+
+<div id="topbar">
+  <div class="tb-left">
+    <button id="btnSidebar" class="btn ghost" title="Toggle sidebar (b)">☰</button>
+    <span id="repoName" class="repo"></span>
+    <span id="branchChip" class="chip branch"></span>
+    <span id="scopeChip" class="chip scope"></span>
+    <div id="progress" class="progress"></div>
+  </div>
+  <div class="tb-right">
+    <button id="btnClassic" class="btn ghost" title="Today's full diff view (⇧C)">Classic</button>
+    <button id="btnComments" class="btn ghost" title="Toggle comments panel (t)">
+      <span class="ico">🗨</span> Comments <span id="cmtCount" class="count">0</span>
+    </button>
+    <button id="btnHelp" class="btn ghost" title="Keyboard shortcuts (?)">?</button>
+    <button id="btnClose" class="btn">Close</button>
+    <button id="btnApprove" class="btn ok">✓ Approve</button>
+    <button id="btnSend" class="btn primary">Send feedback</button>
+  </div>
+</div>
+
+<div id="main">
+  <aside id="sidebar">
+    <div class="side-scroll" id="sideScroll" tabindex="0"></div>
+  </aside>
+  <div class="vsplit" data-target="sidebar"></div>
+
+  <section id="content">
+    <div id="walkBar">
+      <button id="walkBack" class="btn ghost" title="Back (⌫ or Esc)">← Back</button>
+      <nav id="walkCrumbs" aria-label="Where you are"></nav>
+      <div id="walkInfo"></div>
+      <div class="grow"></div>
+      <button id="walkHead" class="btn ghost" title="Show or hide the summary (m)">Hide summary</button>
+      <button id="walkCommits" class="btn ghost" title="Commits (h)">Commits</button>
+    </div>
+    <div id="commitPane">
+      <div id="commitList" class="vlist" tabindex="0"><div class="vspacer"></div><div class="vrows"></div></div>
+    </div>
+    <div class="hsplit" data-target="commitPane"></div>
+
+    <div id="bottom">
+      <div id="tabbar">
+        <button class="tab active" data-tab="changes">Changes</button>
+        <button class="tab" data-tab="tree">File Tree</button>
+        <div class="tabbar-spacer"></div>
+        <div id="streamSummary" class="stream-summary" hidden></div>
+        <div id="diffTools" class="diff-tools">
+          <div class="seg">
+            <button id="segSplit" class="seg-btn active">Split</button>
+            <button id="segUnified" class="seg-btn">Unified</button>
+          </div>
+          <div class="seg">
+            <button id="segWs" class="seg-btn" title="Ignore whitespace-only changes (w)">Ignore ␣</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="panes">
+        <div id="leftPane">
+          <div class="filter-row">
+            <input id="fileFilter" class="filter" placeholder="Filter files… (try unviewed)" spellcheck="false"
+                   title="Substring of the path, plus the words: unviewed, viewed, commented, added, deleted, modified, renamed, untracked, binary, hidden. Prefix with ! to negate; terms are ANDed.">
+            <div class="seg tiny">
+              <button id="segList" class="seg-btn active" title="Flat list of files">List</button>
+              <button id="segTree" class="seg-btn" title="Directory tree">Tree</button>
+            </div>
+            <span class="selall" title="Which files are in the diff stream"><button data-selall>all</button>·<button data-selnone>none</button></span>
+            <button class="icotog" data-foldtoggle aria-label="Fold all files"></button>
+          </div>
+          <div id="fileTree" class="tree" tabindex="0"></div>
+          <div class="hsplit invert" id="ciSplit" data-target="commitInfo" data-min="40" hidden></div>
+          <div id="commitInfo" class="commit-info" hidden></div>
+          <div class="hsplit invert" id="tlSplit" data-target="timelinePane" hidden></div>
+          <div id="timelinePane" hidden>
+            <div class="tl-head">
+              <button id="tlCaret" class="tl-caret" title="Collapse the commits panel">▾</button>
+              <span class="tl-title">Commits <span id="tlCount" class="count"></span></span>
+              <div class="seg tiny">
+                <button id="segUpto" class="seg-btn active" title="Accumulated changes from the base through the selected commit">Up to here</button>
+                <button id="segOnly" class="seg-btn" title="Only the selected commit's changes">This commit</button>
+              </div>
+            </div>
+            <div id="timeline" class="tl-list" tabindex="0"></div>
+          </div>
+        </div>
+        <div class="vsplit" data-target="leftPane"></div>
+        <div id="walkView"></div>
+        <div id="rightPane">
+          <div id="diffHeader" class="diff-header"></div>
+          <div id="searchBar" class="searchbar" hidden>
+            <input id="searchInput" placeholder="Find in file…" spellcheck="false">
+            <span id="searchCount" class="scount"></span>
+            <button id="searchPrev" title="Previous (⇧⏎)">▲</button>
+            <button id="searchNext" title="Next (⏎)">▼</button>
+            <button id="searchClose" title="Close (Esc)">✕</button>
+          </div>
+          <div id="diffBody" class="vlist code" tabindex="0"><div class="vspacer"></div><div class="vrows"></div></div>
+          <div id="hscroll" class="off"><div id="hscrollInner"></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <aside id="commentsPanel" hidden>
+    <div class="cp-head">Comments <span id="cpCount" class="count">0</span></div>
+    <div id="cpList" class="cp-list" tabindex="0"></div>
+  </aside>
+</div>
+
+<!-- annotation popover -->
+<div id="popover" class="popover" hidden>
+  <div class="pop-head">
+    <span id="popTitle">Line</span>
+    <button id="popClose" class="x">✕</button>
+  </div>
+  <div id="popCode" class="pop-code"></div>
+  <div id="popLabels" class="labels"></div>
+  <textarea id="popBody" class="pop-body" placeholder="Leave feedback…" spellcheck="true"></textarea>
+  <label class="blk"><input type="checkbox" id="popBlocking"> blocking</label>
+  <button id="popAddSug" class="linkish">+ Add suggested code</button>
+  <textarea id="popSug" class="pop-sug" placeholder="Suggested replacement…" spellcheck="false" hidden></textarea>
+  <div class="pop-foot">
+    <button id="popDelete" class="btn ghost danger" hidden>Delete</button>
+    <div class="grow"></div>
+    <button id="popSave" class="btn primary">Save <kbd>⌘⏎</kbd></button>
+  </div>
+</div>
+
+<!-- submit modal -->
+<div id="modal" class="modal" hidden>
+  <div class="modal-card">
+    <h2 id="modalTitle">Send feedback</h2>
+    <p id="modalSub" class="sub"></p>
+    <textarea id="modalSummary" class="modal-summary" placeholder="Overall summary (optional)…"></textarea>
+    <div id="modalList" class="modal-list"></div>
+    <div class="modal-foot">
+      <button id="modalCancel" class="btn ghost">Cancel</button>
+      <button id="modalCopy" class="btn ghost" title="Copy the exact markdown the agent would receive">Copy markdown</button>
+      <button id="modalConfirm" class="btn primary">Send to agent</button>
+    </div>
+  </div>
+</div>
+
+<!-- undo toast: a deleted comment is unsent work, and delete has no dialog -->
+<div id="toast" class="toast" hidden>
+  <span id="toastText"></span>
+  <button id="toastUndo" class="linkish">Undo <kbd>⌘Z</kbd></button>
+</div>
+
+<div id="done" class="done" hidden>
+  <div class="done-card">
+    <div id="doneIcon" class="done-icon">✓</div>
+    <h2 id="doneTitle">Feedback sent</h2>
+    <p id="doneSub" class="sub">You can close this tab.</p>
+  </div>
+</div>
+
+<div id="walkHint" aria-hidden="true"></div>
+
+<div id="helpSheet" class="modal" hidden>
+  <div class="modal-card small">
+    <h2>Shortcuts</h2>
+    <table class="keys wk-keys">
+      <tr><th colspan="2">Walkthrough — the map</th></tr>
+      <tr><td><kbd>←</kbd> <kbd>↑</kbd> <kbd>→</kbd> <kbd>↓</kbd></td><td>move between boxes</td></tr>
+      <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous box</td></tr>
+      <tr><td><kbd>⏎</kbd> or <kbd>Space</kbd></td><td>open the box</td></tr>
+      <tr><td><kbd>1</kbd> – <kbd>9</kbd></td><td>open box number N</td></tr>
+      <tr><td><kbd>⌫</kbd> or <kbd>Esc</kbd></td><td>back</td></tr>
+      <tr><td><kbd>g</kbd></td><td>home</td></tr>
+      <tr><td><kbd>0</kbd> · <kbd>+</kbd> · <kbd>−</kbd></td><td>fit · zoom in · zoom out</td></tr>
+      <tr><td><kbd>m</kbd></td><td>show / hide the summary</td></tr>
+      <tr><th colspan="2">Walkthrough — a file and anywhere</th></tr>
+      <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous file in walkthrough order (tests follow their file)</td></tr>
+      <tr><td><kbd>⇧T</kbd></td><td>jump between a file and its tests</td></tr>
+      <tr><td><kbd>/</kbd> or <kbd>⌘K</kbd></td><td>go to any file</td></tr>
+      <tr><td><kbd>h</kbd></td><td>commits</td></tr>
+      <tr><td><kbd>⇧C</kbd></td><td>switch to Classic and back</td></tr>
+      <tr><th colspan="2">Diff (both views)</th></tr>
+    </table>
+    <table class="keys">
+      <tr><td><kbd>⌃h</kbd> <kbd>⌃j</kbd> <kbd>⌃k</kbd> <kbd>⌃l</kbd></td><td>move between panes (⌃ + arrows too)</td></tr>
+      <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous file</td></tr>
+      <tr><td><kbd>n</kbd> / <kbd>p</kbd></td><td>next / previous change</td></tr>
+      <tr><td><kbd>]</kbd> / <kbd>[</kbd></td><td>next / previous comment</td></tr>
+      <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>move the line cursor</td></tr>
+      <tr><td><kbd>c</kbd></td><td>comment on focused line</td></tr>
+      <tr><td><kbd>⌘F</kbd></td><td>find in file</td></tr>
+      <tr><td><kbd>s</kbd></td><td>split / unified</td></tr>
+      <tr><td><kbd>f</kbd></td><td>full file / diff only</td></tr>
+      <tr><td><kbd>w</kbd></td><td>ignore whitespace-only changes</td></tr>
+      <tr><td><kbd>v</kbd></td><td>mark viewed &amp; go to next unviewed</td></tr>
+      <tr><td><kbd>t</kbd></td><td>toggle comments panel</td></tr>
+      <tr><td><kbd>b</kbd></td><td>toggle sidebar</td></tr>
+      <tr><td><kbd>/</kbd></td><td>filter files — a path substring, or <code>unviewed</code>, <code>commented</code>, <code>added</code>, <code>deleted</code>, <code>modified</code>, <code>renamed</code>, <code>untracked</code>, <code>binary</code>, <code>hidden</code>; <code>!</code> negates</td></tr>
+      <tr><td><kbd>⌘⏎</kbd></td><td>save comment / send feedback</td></tr>
+      <tr><td><kbd>⌘Z</kbd></td><td>undo the last deleted comment</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>close popover, dialog or filter</td></tr>
+    </table>
+    <div class="modal-foot"><div class="grow"></div><button id="helpClose" class="btn primary">Got it</button></div>
+  </div>
+</div>
+
+<script src="scope.js"></script>
+<script src="feedback.js"></script>
+<script src="demo.js"></script>
+<script src="review-model.js"></script>
+<script src="highlight.js"></script>
+<script src="keys.js"></script>
+<script src="walkthrough.js"></script>
+<script src="vendor/canvas.js"></script>
+<script src="walk.js"></script>
+<script>if (!window.Walk) document.body.className = "mode-classic"; // the walkthrough failed to load: show the diff</script>
+<script src="app.js"></script>
+</body>
+</html>

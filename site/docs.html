@@ -5,7 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Docs — diffotator</title>
 <meta name="description" content="Install diffotator, wire it into Claude Code, and learn the review loop, scopes, comment labels, keyboard shortcuts and CLI flags.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%234fae63'/><path d='M32 0v32H0z' fill='%23d1596a'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%235be08a'/><path d='M32 0v32H0z' fill='%23ff6f86'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -15,8 +18,8 @@
     <a class="brand" href="/"><span class="mark"></span>diffotator</a>
     <span class="sp"></span>
     <a class="navlink" href="/">Home</a>
-    <a class="navlink on" href="/docs">Docs</a>
-    <a class="navlink" href="https://github.com/adisagar2003/diffotator">GitHub ↗</a>
+    <a class="navlink on keep" href="/docs">Docs</a>
+    <a class="navlink keep" href="https://github.com/adisagar2003/diffotator">GitHub</a>
   </nav>
 </header>
 
@@ -25,9 +28,10 @@
     <div>Start</div>
     <a href="#requirements">Requirements</a>
     <a href="#install">Install</a>
-    <a href="#claude-code">Claude Code</a>
+    <a href="#claude-code">Your agent</a>
     <a href="#hook">Automatic review</a>
     <div>Using it</div>
+    <a href="#walkthrough">The walkthrough</a>
     <a href="#scopes">Scopes</a>
     <a href="#loop">The review loop</a>
     <a href="#comments">Comments</a>
@@ -46,7 +50,8 @@
   <section id="requirements">
     <h2>Requirements</h2>
     <p>Node 18 or newer, and <code>git</code> on your <code>PATH</code>. That's the whole list —
-       diffotator has no npm dependencies.</p>
+       there is no <code>npm install</code>. The walkthrough map's React, React Flow and ELK ship
+       prebuilt in <code>web/vendor/</code>.</p>
     <p class="dim">macOS, Linux and Windows. The browser is whatever <code>open</code> /
        <code>xdg-open</code> / <code>start</code> launches.</p>
   </section>
@@ -78,17 +83,25 @@ ok — all checks passed</code></pre>
   </section>
 
   <section id="claude-code">
-    <h2>Claude Code integration</h2>
+    <h2>Using it with your agent</h2>
+    <p>Once the command is installed, ask in plain words:</p>
+<pre><code>use diffotator to review https://github.com/you/shop/pull/42
+use diffotator to review my changes</code></pre>
+    <p>For a pull or merge request link, the agent checks it out in a temporary folder, reads the
+       change and your repo's own docs, writes the walkthrough, and opens it. On someone else's
+       change it never edits their branch: <code>question:</code> comments get answers, and the rest
+       come back as draft review comments that are posted only when you say so.</p>
+    <h3>How the command works</h3>
     <p>The integration is one slash command. <code>claude/diffotator.md</code> installs as
        <code>/diffotator</code> and tells Claude to run the CLI in the background, wait, and act on
        whatever comes back:</p>
 <pre><code><span class="c">---</span>
-<span class="k">description</span>: Open the current diff in diffotator for review
+<span class="k">description</span>: Review a change in diffotator — your working tree, a branch, or someone's MR/PR — as a walkthrough
 <span class="k">allowed-tools</span>: Bash(diffotator:*)
 <span class="c">---</span>
 
-Run `diffotator $ARGUMENTS` in the background (it blocks until the review
-session is submitted, which can exceed the Bash timeout)…</code></pre>
+Open a review in diffotator. It opens on a walkthrough: what the change does,
+the domain background a reviewer needs, and a map of the change…</code></pre>
     <p>Then in any session:</p>
 <pre><code>/diffotator
 /diffotator --base origin/main</code></pre>
@@ -145,6 +158,23 @@ Reviews open when a turn leaves 3+ changed files.</code></pre>
       <code>DIFFOTATOR_HOOK=off</code> to disable without uninstalling, and
       <code>DIFFOTATOR_DEBUG=1</code> to print the gate decision to stderr.
     </div>
+  </section>
+
+  <section id="walkthrough">
+    <h2>The walkthrough</h2>
+    <p>Every review opens on a walkthrough. On top: <b>What this change does</b> (a short summary,
+       the key changes, decisions, and the one place to look hardest) beside <b>Know this first</b>
+       (the words you need, each linked to the doc it came from). Below: the map.</p>
+    <p>The map groups the change into parts. Each box shows what's inside it — parts hold smaller
+       parts or files, files hold their tests. Labelled arrows say how parts connect; dashed arrows
+       follow a call from one file to another. Hover a box and its arrows light up.</p>
+    <p>Click a part and the map becomes that part. Click a file and its diff opens in the same spot.
+       <b>← Back</b>, the breadcrumb or your browser's Back go up again. <b>Classic</b> (or
+       <kbd>⇧C</kbd>) shows the full git client.</p>
+    <div class="shot-frame"><img src="/shot-walkthrough.png" alt="The walkthrough: a summary and a Know this first panel above a map of parts, files and tests" loading="lazy"></div>
+    <p class="caption">diffotator reviewing its own 2.0 change.</p>
+    <h3>No walkthrough written?</h3>
+    <p>The map groups the change by folder instead, so the walkthrough is always where you start.</p>
   </section>
 
   <section id="scopes">
@@ -253,6 +283,27 @@ Reviews open when a turn leaves 3+ changed files.</code></pre>
 
   <section id="keys">
     <h2>Keyboard</h2>
+    <h3>On the map</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th style="width:150px">Key</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td><kbd>←</kbd> <kbd>↑</kbd> <kbd>→</kbd> <kbd>↓</kbd></td><td>Move between boxes</td></tr>
+          <tr><td><kbd>⏎</kbd> or <kbd>Space</kbd></td><td>Open the box</td></tr>
+          <tr><td><kbd>1</kbd> – <kbd>9</kbd></td><td>Open box number N</td></tr>
+          <tr><td><kbd>⌫</kbd> or <kbd>Esc</kbd></td><td>Back</td></tr>
+          <tr><td><kbd>g</kbd></td><td>Home</td></tr>
+          <tr><td><kbd>0</kbd> <kbd>+</kbd> <kbd>−</kbd></td><td>Fit, zoom in, zoom out</td></tr>
+          <tr><td><kbd>m</kbd></td><td>Show or hide the summary</td></tr>
+          <tr><td><kbd>j</kbd> <kbd>k</kbd></td><td>In a file: next / previous file in walkthrough order</td></tr>
+          <tr><td><kbd>⇧T</kbd></td><td>Jump between a file and its tests</td></tr>
+          <tr><td><kbd>/</kbd> or <kbd>⌘K</kbd></td><td>Go to any file</td></tr>
+          <tr><td><kbd>h</kbd></td><td>Commits</td></tr>
+          <tr><td><kbd>⇧C</kbd></td><td>Classic view and back</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>In a diff</h3>
     <div class="tablewrap">
       <table>
         <thead><tr><th style="width:150px">Key</th><th>Action</th></tr></thead>
@@ -298,13 +349,14 @@ diffotator hook --uninstall        <span class="c"># remove it</span></code></pr
           <tr><td class="mono">-p, --port &lt;n&gt;</td><td>Port to listen on. Default: a random free port.</td></tr>
           <tr><td class="mono">--no-open</td><td>Don't launch a browser; just print the URL.</td></tr>
           <tr><td class="mono">--title &lt;s&gt;</td><td>Header title for the session.</td></tr>
+          <tr><td class="mono">--walkthrough &lt;path&gt;</td><td>Open on a walkthrough your agent wrote (JSON). Opens on the branch-vs-base range.</td></tr>
           <tr><td class="mono">-h, --help</td><td>Usage.</td></tr>
         </tbody>
       </table>
     </div>
     <h3>Reviewing a pull or merge request</h3>
-    <p>There's no built-in fetching. Check it out locally and point diffotator at the base — this
-       also gets you the full working tree to browse, which a diff-only view can't:</p>
+    <p>Easiest: ask your agent, <code>use diffotator to review &lt;link&gt;</code>. By hand, check it out
+       locally and point diffotator at the base — this also gets you the full working tree to browse:</p>
 <pre><code>gh pr checkout 123   <span class="c"># or: glab mr checkout 123</span>
 diffotator --base origin/main</code></pre>
     <p>The server binds to <code>127.0.0.1</code> only.</p>
@@ -434,13 +486,12 @@ Address every comment above…</code></pre>
 </div>
 
 <footer>
-  <div class="wrap row">
-    <span>diffotator — a local git review tool for coding agents.</span>
-    <span class="sp"></span>
-    <a href="/">Home</a>
-    <a href="#install">Install</a>
-    <a href="https://github.com/adisagar2003/diffotator">GitHub</a>
-  </div>
+  <span class="brand"><span class="mark" aria-hidden="true"></span>diffotator</span>
+  <span class="sp"></span>
+  <a href="/">Home</a>
+  <a href="#install">Install</a>
+  <a href="https://github.com/adisagar2003/diffotator">GitHub</a>
+  <span class="dim">MIT</span>
 </footer>
 </body>
 </html>
