@@ -139,9 +139,20 @@
   <section id="install" class="install">
     <h2>Set up in a minute</h2>
     <p class="lead">Mac, Windows or Linux. You need Node 18 or newer and git.</p>
-    <div class="code">
-      <button class="copy" data-copy-from="installCmds">Copy</button>
-<pre id="installCmds">npm install -g diffotator
+    <div class="tabs" role="tablist" aria-label="How to install">
+      <button role="tab" id="tab-npm" aria-selected="true" aria-controls="pane-npm">npm</button>
+      <button role="tab" id="tab-src" aria-selected="false" aria-controls="pane-src" tabindex="-1">From source</button>
+    </div>
+    <div class="code" role="tabpanel" id="pane-npm" aria-labelledby="tab-npm">
+      <button class="copy" data-copy-from="installNpm">Copy</button>
+<pre id="installNpm">npm install -g diffotator
+diffotator setup</pre>
+    </div>
+    <div class="code" role="tabpanel" id="pane-src" aria-labelledby="tab-src" hidden>
+      <button class="copy" data-copy-from="installSrc">Copy</button>
+<pre id="installSrc">git clone https://github.com/adisagar2003/diffotator.git
+cd diffotator
+npm link
 diffotator setup</pre>
     </div>
     <p class="then">Then ask your agent:</p>

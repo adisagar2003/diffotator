@@ -23,6 +23,27 @@
     show(steps[0]);
   }
 
+  // --- install tabs: npm or from source ------------------------------------------
+  const tabs = [...document.querySelectorAll('.tabs [role="tab"]')];
+  const pick = (tab) => {
+    tabs.forEach((t) => {
+      const on = t === tab;
+      t.setAttribute("aria-selected", on);
+      t.tabIndex = on ? 0 : -1;
+      document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+    });
+  };
+  tabs.forEach((t, i) => {
+    t.addEventListener("click", () => pick(t));
+    t.addEventListener("keydown", (e) => {
+      const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      if (!d) return;
+      const next = tabs[(i + d + tabs.length) % tabs.length];
+      pick(next);
+      next.focus();
+    });
+  });
+
   // --- copy buttons ------------------------------------------------------------
   document.addEventListener("click", async (e) => {
     const btn = e.target.closest(".copy");
