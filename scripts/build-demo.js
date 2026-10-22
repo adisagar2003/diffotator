@@ -71,6 +71,9 @@ const OUT = path.join(ROOT, "site", "demo");
   let html = fs.readFileSync(path.join(ROOT, "web", "index.html"), "utf8").replace(/(href|src)="\//g, '$1="');
   html = html.replace('<script src="scope.js"></script>', '<script src="scope.js"></script>\n<script src="feedback.js"></script>\n<script src="demo.js"></script>');
   if (!html.includes('src="demo.js"')) throw new Error("index.html changed shape: could not insert demo.js");
+  // Vercel serves this page at /demo (no trailing slash), where relative paths
+  // would resolve from the site root; the base tag pins them to the folder.
+  html = html.replace("<head>", '<head>\n<base href="/demo/">');
   fs.writeFileSync(path.join(OUT, "index.html"), html.replace("<title>diffotator</title>", "<title>diffotator — live demo</title>"));
   fs.copyFileSync(path.join(ROOT, "site-src", "demo.js"), path.join(OUT, "demo.js"));
   fs.writeFileSync(path.join(OUT, "data.json"), json);
