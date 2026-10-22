@@ -4,9 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>diffotator</title>
+<link rel="stylesheet" href="/vendor/canvas.css">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<script>
+  // The view from last time, before first paint, so Classic users see no walkthrough flash.
+  try { document.body.className = sessionStorage.getItem("diffotator.mode") === "classic" ? "mode-classic" : "mode-walk"; }
+  catch (e) { document.body.className = "mode-walk"; }
+</script>
 
 <div id="topbar">
   <div class="tb-left">
@@ -17,6 +23,7 @@
     <div id="progress" class="progress"></div>
   </div>
   <div class="tb-right">
+    <button id="btnClassic" class="btn ghost" title="Today's full diff view (⇧C)">Classic</button>
     <button id="btnComments" class="btn ghost" title="Toggle comments panel (t)">
       <span class="ico">🗨</span> Comments <span id="cmtCount" class="count">0</span>
     </button>
@@ -34,6 +41,14 @@
   <div class="vsplit" data-target="sidebar"></div>
 
   <section id="content">
+    <div id="walkBar">
+      <button id="walkBack" class="btn ghost" title="Back (⌫ or Esc)">← Back</button>
+      <nav id="walkCrumbs" aria-label="Where you are"></nav>
+      <div id="walkInfo"></div>
+      <div class="grow"></div>
+      <button id="walkHead" class="btn ghost" title="Show or hide the summary (m)">Hide summary</button>
+      <button id="walkCommits" class="btn ghost" title="Commits (h)">Commits</button>
+    </div>
     <div id="commitPane">
       <div id="commitList" class="vlist" tabindex="0"><div class="vspacer"></div><div class="vrows"></div></div>
     </div>
@@ -85,6 +100,7 @@
           </div>
         </div>
         <div class="vsplit" data-target="leftPane"></div>
+        <div id="walkView"></div>
         <div id="rightPane">
           <div id="diffHeader" class="diff-header"></div>
           <div id="searchBar" class="searchbar" hidden>
@@ -155,9 +171,29 @@
   </div>
 </div>
 
+<div id="walkHint" aria-hidden="true"></div>
+
 <div id="helpSheet" class="modal" hidden>
   <div class="modal-card small">
     <h2>Shortcuts</h2>
+    <table class="keys wk-keys">
+      <tr><th colspan="2">Walkthrough — the map</th></tr>
+      <tr><td><kbd>←</kbd> <kbd>↑</kbd> <kbd>→</kbd> <kbd>↓</kbd></td><td>move between boxes</td></tr>
+      <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous box</td></tr>
+      <tr><td><kbd>⏎</kbd> or <kbd>Space</kbd></td><td>open the box</td></tr>
+      <tr><td><kbd>1</kbd> – <kbd>9</kbd></td><td>open box number N</td></tr>
+      <tr><td><kbd>⌫</kbd> or <kbd>Esc</kbd></td><td>back</td></tr>
+      <tr><td><kbd>g</kbd></td><td>home</td></tr>
+      <tr><td><kbd>0</kbd> · <kbd>+</kbd> · <kbd>−</kbd></td><td>fit · zoom in · zoom out</td></tr>
+      <tr><td><kbd>m</kbd></td><td>show / hide the summary</td></tr>
+      <tr><th colspan="2">Walkthrough — a file and anywhere</th></tr>
+      <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous file in walkthrough order (tests follow their file)</td></tr>
+      <tr><td><kbd>⇧T</kbd></td><td>jump between a file and its tests</td></tr>
+      <tr><td><kbd>/</kbd> or <kbd>⌘K</kbd></td><td>go to any file</td></tr>
+      <tr><td><kbd>h</kbd></td><td>commits</td></tr>
+      <tr><td><kbd>⇧C</kbd></td><td>switch to Classic and back</td></tr>
+      <tr><th colspan="2">Diff (both views)</th></tr>
+    </table>
     <table class="keys">
       <tr><td><kbd>⌃h</kbd> <kbd>⌃j</kbd> <kbd>⌃k</kbd> <kbd>⌃l</kbd></td><td>move between panes (⌃ + arrows too)</td></tr>
       <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous file</td></tr>
@@ -185,6 +221,10 @@
 <script src="/review-model.js"></script>
 <script src="/highlight.js"></script>
 <script src="/keys.js"></script>
+<script src="/walkthrough.js"></script>
+<script src="/vendor/canvas.js"></script>
+<script src="/walk.js"></script>
+<script>if (!window.Walk) document.body.className = "mode-classic"; // the walkthrough failed to load: show the diff</script>
 <script src="/app.js"></script>
 </body>
 </html>

@@ -10,6 +10,7 @@ const G = require("./src/git");
 const Scope = require("./src/scope");
 const RM = require("./web/review-model");
 const { render } = require("./src/feedback");
+const W = require("./src/walkthrough");
 
 // --- feedback rendering ----------------------------------------------------
 assert.strictEqual(render({ decision: "approved", annotations: [] }), "The user approved.");
@@ -82,6 +83,175 @@ assert.ok(
   });
   assert.ok(out.includes('re: commit abcdef1 "feat: add thing"'), "commit tag rendered");
   assert.strictEqual(out.match(/re: commit/g).length, 1, "only the tagged comment carries it");
+}
+
+// --- walkthrough: validate, fallback, routes, index, graph ------------------
+{
+  const paths = ["a/h1.ts", "a/h1.test.ts", "a/h2.ts", "b/s.ts", "c/x.ts"];
+  const wt = W.validate(
+    {
+      title: " T ", ticket: "TRA-1", summary: "S",
+      changes: [["When", "now"], { label: "Locks", text: "row" }, ["", "dropped"]],
+      decisions: ["flat fee waits", 7],
+      lookHard: "h1.ts",
+      domain: [["Cost rule", "a rule"]],
+      terms: [{ term: "Rule cost", meaning: "m", source: "a/CONTEXT.md" }, { meaning: "no term" }],
+      mr: { iid: 7417, url: "https://gitlab.com/x/-/merge_requests/7417" },
+      blocks: [
+        { id: "a", label: "A", children: [
+          { id: "h", label: "Handlers", big: true, files: [{ path: "a/h1.ts", tests: ["a/h1.test.ts", "nope.test.ts"] }, "a/h2.ts", "nope.ts"] },
+        ] },
+        { id: "b", label: "B", files: ["b/s.ts", "a/h1.ts"] },
+      ],
+      edges: [{ from: "a", to: "b", label: "books" }, { from: "a", to: "ghost" }],
+      links: [{ from: "a/h2.ts", to: "b/s.ts", label: "calls" }, { from: "a/h2.ts", to: "nope.ts" }, { from: "b/s.ts", to: "b/s.ts" }],
+    },
+    paths
+  );
+  assert.strictEqual(wt.fallback, false);
+  assert.strictEqual(wt.title, "T", "strings are trimmed");
+  assert.deepStrictEqual(wt.changes, [{ label: "When", text: "now" }, { label: "Locks", text: "row" }], "pairs or objects; empty label dropped");
+  assert.deepStrictEqual(wt.decisions, ["flat fee waits"], "non-strings dropped");
+  assert.deepStrictEqual(wt.mr, { iid: "7417", url: "https://gitlab.com/x/-/merge_requests/7417" });
+  assert.deepStrictEqual(wt.terms, [{ term: "Rule cost", meaning: "m", source: "a/CONTEXT.md" }]);
+  assert.deepStrictEqual(
+    W.validate({ terms: ["../../etc/passwd", "/etc/passwd", "C:\\x", "a/../../b", "docs/ok.md"].map((source) => ({ term: "t", source })) }, []).terms.map((t) => t.source),
+    [null, null, null, null, "docs/ok.md"],
+    "a term's source stays inside the repo"
+  );
+  const h = wt.blocks[0].children[0];
+  assert.deepStrictEqual(h.files, [{ path: "a/h1.ts", tests: ["a/h1.test.ts"] }, { path: "a/h2.ts", tests: [] }], "tests nest; unknown paths dropped");
+  assert.strictEqual(h.big, true);
+  assert.deepStrictEqual(wt.blocks[1].files, [{ path: "b/s.ts", tests: [] }], "duplicate keeps first placement");
+  assert.strictEqual(wt.blocks.at(-1).id, "other");
+  assert.deepStrictEqual(wt.blocks.at(-1).files, [{ path: "c/x.ts", tests: [] }], "unlisted file lands in Other");
+  assert.deepStrictEqual(wt.edges, [{ from: "a", to: "b", label: "books" }], "edge to unknown id dropped");
+  assert.deepStrictEqual(wt.links, [{ from: "a/h2.ts", to: "b/s.ts", label: "calls" }], "links to unknown files and self-links dropped");
+  assert.strictEqual(wt.blocks[0].count, 3, "count includes nested tests");
+  const placed = [];
+  const walk = (bs) => bs.forEach((b) => (b.files ? b.files.forEach((f) => placed.push(f.path, ...f.tests)) : walk(b.children)));
+  walk(wt.blocks);
+  assert.deepStrictEqual(placed.sort(), [...paths].sort(), "every changed file exactly once");
+
+  const idx = W.index(wt.blocks);
+  assert.deepStrictEqual(idx.get("a/h1.test.ts"), { ids: ["a", "h"], owner: "a/h1.ts", tests: [], tone: 0 });
+  assert.deepStrictEqual(idx.get("a/h1.ts").tests, ["a/h1.test.ts"]);
+  assert.strictEqual(idx.get("b/s.ts").tone, 1);
+  assert.deepStrictEqual(W.fileOrder(wt.blocks), ["a/h1.ts", "a/h1.test.ts", "a/h2.ts", "b/s.ts", "c/x.ts"], "tests right after their file");
+}
+{ // validate repairs sloppy input
+  const wt = W.validate(
+    { blocks: [
+      { id: "x", files: ["p.ts"] },
+      { id: "x", label: "Dup", files: ["q.ts"] },
+      { id: "y", label: "Both", files: ["r.ts"], children: [{ id: "z", label: "Z", files: ["s.ts"] }] },
+      { id: "other", label: "Mine", files: ["t.ts"] },
+      "junk",
+    ] },
+    ["p.ts", "q.ts", "r.ts", "s.ts", "t.ts"]
+  );
+  assert.strictEqual(wt.blocks[0].label, "x", "missing label falls back to id");
+  assert.strictEqual(wt.blocks[1].id, "x-2", "duplicate sibling id made unique");
+  assert.strictEqual(wt.blocks[2].files, null, "children win over files");
+  assert.strictEqual(wt.blocks[3].id, "other-2", "reserved id renamed");
+  const odd = W.validate({ blocks: [{ id: "file:auth", files: ["p.ts"] }, { id: "dir:x", files: ["q.ts"] }, { id: "a/b", files: ["r.ts"] }] }, ["p.ts", "q.ts", "r.ts"]);
+  assert.deepStrictEqual(odd.blocks.map((b) => b.id), ["file-auth", "dir-x", "a-b"], "reserved prefixes and slashes are rewritten, and the loop ends");
+  const renamed = W.validate(
+    {
+      blocks: [
+        { id: "file:cost", files: ["p.ts"] },
+        { id: "backend/recompute", children: [{ id: "x", files: ["q.ts"] }, { id: "x", files: ["r.ts"] }], edges: [{ from: "x", to: "x-2" }] },
+        { id: "z", files: ["s.ts"] },
+      ],
+      edges: [{ from: "file:cost", to: "backend/recompute", label: "a" }, { from: "backend/recompute", to: "z", label: "b" }],
+    },
+    ["p.ts", "q.ts", "r.ts", "s.ts"]
+  );
+  assert.deepStrictEqual(renamed.edges, [{ from: "file-cost", to: "backend-recompute", label: "a" }, { from: "backend-recompute", to: "z", label: "b" }], "edges follow a renamed id");
+  assert.deepStrictEqual(renamed.blocks[1].edges, [{ from: "x", to: "x-2", label: "" }], "an edge may name the generated id too");
+  assert.deepStrictEqual(wt.blocks.at(-1), { id: "other", label: "Other", note: "", big: false, children: null, files: [{ path: "r.ts", tests: [] }], edges: [], count: 1 }, "dropped files reach Other");
+}
+{ // blocks with nothing left are pruned; empty scope
+  const wt = W.validate({ blocks: [{ id: "a", label: "A", files: ["gone.ts"] }, { id: "p", children: [{ id: "q", files: ["gone.ts"] }] }] }, ["k.ts"]);
+  assert.deepStrictEqual(wt.blocks.map((b) => b.id), ["other"]);
+  const empty = W.validate({ blocks: [{ id: "a", label: "A", files: ["k.ts"] }] }, []);
+  assert.deepStrictEqual(empty.blocks, [], "validate on empty paths");
+  assert.deepStrictEqual(W.validate("not an object", ["k.ts"]).fallback, true, "a non-object is not a walkthrough");
+}
+{ // null raw → folder fallback, error carried
+  const wt = W.validate(null, ["apps/backend/src/a.ts", "apps/backend/src/b.ts", "apps/backend/c.ts", "apps/frontend/d.ts", "README.md"], "bad json");
+  assert.strictEqual(wt.fallback, true);
+  assert.strictEqual(wt.error, "bad json");
+  assert.strictEqual(wt.summary, "");
+  assert.deepStrictEqual(wt.blocks.map((b) => [b.id, b.label]), [["dir:apps", "apps"], ["root-files", "Root files"]]);
+  const backend = wt.blocks[0].children[0];
+  assert.deepStrictEqual([backend.id, backend.label], ["dir:apps/backend", "backend"]);
+  assert.deepStrictEqual(
+    backend.children.map((b) => [b.label, b.files.map((f) => f.path)]),
+    [["src", ["apps/backend/src/a.ts", "apps/backend/src/b.ts"]], ["backend files", ["apps/backend/c.ts"]]],
+    "a folder with both subfolders and files puts its own files in a child block"
+  );
+  assert.deepStrictEqual(wt.blocks[0].children[1].files, [{ path: "apps/frontend/d.ts", tests: [] }]);
+  assert.strictEqual(wt.blocks[0].count, 4);
+}
+{ // routes round-trip awkward paths
+  for (const r of [
+    { kind: "home" }, { kind: "commits" },
+    { kind: "block", path: ["dir:apps", "x-2"] },
+    { kind: "file", file: "src/a b/#weird%.ts" },
+    { kind: "doc", file: "docs/naïve.md" },
+  ]) assert.deepStrictEqual(W.parseRoute(W.formatRoute(r)), r);
+  assert.deepStrictEqual(W.parseRoute(""), { kind: "home" });
+  assert.deepStrictEqual(W.parseRoute("#/zzz/1"), { kind: "home" });
+  assert.deepStrictEqual(W.parseRoute("#/f/%E0%A4%A"), { kind: "home" }, "a malformed escape is not a crash");
+  const blocks = [{ id: "a", children: [{ id: "h", files: [{ path: "x.ts", tests: [] }], children: null }], files: null }];
+  assert.strictEqual(W.findBlock(blocks, ["a", "h"]).id, "h");
+  assert.strictEqual(W.findBlock(blocks, ["a", "nope"]), null);
+  assert.strictEqual(W.findBlock(blocks, []), null);
+}
+{ // buildGraph: one level, each box showing its own children
+  const wt = W.validate(
+    {
+      blocks: [
+        { id: "spec", label: "Specs", files: ["s.md"] },
+        { id: "be", label: "Backend", children: [
+          { id: "rec", label: "Recompute", files: [{ path: "rec.ts", tests: ["rec.test.ts"] }, "adj.ts"] },
+          { id: "land", label: "Landing", big: true, files: ["land.ts"] },
+        ], edges: [{ from: "rec", to: "land", label: "calls" }] },
+      ],
+      edges: [{ from: "spec", to: "be", label: "checks" }],
+      links: [{ from: "adj.ts", to: "land.ts", label: "sync" }, { from: "rec.ts", to: "adj.ts" }],
+    },
+    ["s.md", "rec.ts", "rec.test.ts", "adj.ts", "land.ts"]
+  );
+  const stats = new Map([["s.md", { add: 3, del: 0 }], ["rec.ts", { add: 10, del: 2 }], ["rec.test.ts", { add: 5, del: 0 }], ["adj.ts", { add: 1, del: 1 }], ["land.ts", { add: 900, del: 10 }]]);
+  const home = W.buildGraph(wt, { kind: "home" }, stats);
+  const byId = Object.fromEntries(home.nodes.map((n) => [n.id, n]));
+  assert.deepStrictEqual(home.nodes.filter((n) => !n.parent).map((n) => [n.id, n.kind, n.n]), [["spec", "group", 1], ["be", "group", 2]], "top-level boxes numbered");
+  assert.strictEqual(byId["file:s.md"].parent, "spec", "a leaf group shows its files inside");
+  assert.deepStrictEqual([byId["be/rec"].kind, byId["be/rec"].parent], ["block", "be"], "a parent group shows its sub-blocks inside");
+  assert.deepStrictEqual(byId["be/rec"].nav, { kind: "block", path: ["be", "rec"] });
+  assert.deepStrictEqual([byId["be/rec"].add, byId["be/rec"].del, byId["be/rec"].sub], [16, 3, "3 files"], "a block counts and sums its tests too");
+  assert.strictEqual(byId["be/land"].big, true);
+  assert.deepStrictEqual(home.edges.map((e) => [e.from, e.to, e.kind]), [["be/rec", "be/land", "block"], ["spec", "be", "block"]], "file links need both ends on screen");
+
+  const leaf = W.buildGraph(wt, { kind: "block", path: ["be", "rec"] }, stats);
+  const lid = Object.fromEntries(leaf.nodes.map((n) => [n.id, n]));
+  assert.deepStrictEqual(lid["file:rec.ts"].tests, [{ path: "rec.test.ts", tag: "TEST", add: 5 }], "tests ride inside their file");
+  assert.deepStrictEqual([lid["ghost:land.ts"].kind, lid["ghost:land.ts"].sub, lid["ghost:land.ts"].nav], ["ghost", "in Landing", { kind: "file", file: "land.ts" }], "a link leaving the block shows its far end as a ghost");
+  assert.deepStrictEqual(leaf.edges.map((e) => [e.from, e.to, e.kind]).sort(), [["file:adj.ts", "ghost:land.ts", "link"], ["file:rec.ts", "file:adj.ts", "link"]]);
+  assert.strictEqual(lid["file:land.ts"], undefined);
+  assert.deepStrictEqual(lid["file:rec.ts"].nav, { kind: "file", file: "rec.ts" });
+  assert.strictEqual(W.buildGraph(wt, { kind: "block", path: ["nope"] }, stats), null, "a stale route builds nothing");
+  assert.strictEqual(W.testTag("apps/frontend/e2e/flows/x.spec.ts"), "E2E");
+  assert.strictEqual(W.testTag("src/__tests__/rateHistory.helper.ts"), "HELP");
+}
+
+// --- vendored canvas bundle --------------------------------------------------
+{
+  const js = fs.readFileSync(path.join(__dirname, "web/vendor/canvas.js"), "utf8");
+  assert.ok(js.includes("WalkCanvas"), "the bundle exposes window.WalkCanvas");
+  assert.ok(fs.statSync(path.join(__dirname, "web/vendor/canvas.css")).size > 0, "React Flow's stylesheet ships beside it");
 }
 
 // --- commit timeline (panel contract) ---------------------------------------
@@ -1489,6 +1659,29 @@ async function httpSurface() {
 
   const ov = await json("/api/overview");
   assert.strictEqual(ov.title, "session title", "the session title reaches the page");
+  assert.strictEqual(ov.walkthrough, false, "no flag, no walkthrough");
+  const plainWt = await json("/api/walkthrough?scope=worktree");
+  assert.strictEqual(plainWt.fallback, true, "no flag → folder fallback");
+  assert.strictEqual(plainWt.error, null);
+  assert.deepStrictEqual(plainWt.blocks.map((b) => b.id), ["root-files"]);
+  {
+    const wtFile = path.join(os.tmpdir(), "wt-" + path.basename(d) + ".json");
+    fs.writeFileSync(wtFile, JSON.stringify({ title: "Walk", summary: "S", blocks: [{ id: "x", label: "X", files: ["a.ts"] }] }));
+    const s2 = createServer({ root, walkthrough: wtFile });
+    await new Promise((r) => s2.listen(0, "127.0.0.1", r));
+    const b2 = `http://127.0.0.1:${s2.address().port}`;
+    assert.strictEqual((await (await fetch(b2 + "/api/overview")).json()).walkthrough, true);
+    const wt = await (await fetch(b2 + "/api/walkthrough?scope=worktree")).json();
+    assert.strictEqual(wt.title, "Walk");
+    assert.deepStrictEqual(wt.blocks.map((b) => b.id), ["x"]);
+    fs.writeFileSync(wtFile, "{not json");
+    const broken = await (await fetch(b2 + "/api/walkthrough?scope=worktree")).json();
+    assert.strictEqual(broken.fallback, true, "a broken file falls back to folders");
+    assert.ok(broken.error.startsWith("Couldn't read the walkthrough file"), "…and says why");
+    assert.strictEqual((await fetch(b2 + "/walkthrough.js")).status, 200, "the shared module reaches the page");
+    await new Promise((r) => s2.close(r));
+    fs.rmSync(wtFile, { force: true });
+  }
   assert.strictEqual(ov.branch, "main");
 
   const { files } = await json("/api/files?scope=worktree");

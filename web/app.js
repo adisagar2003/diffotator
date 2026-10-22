@@ -69,6 +69,7 @@ const S = {
   commitsDone: false,
   tl: null, // commit timeline: { base, head, commits, sel, mode } while the scope family is a range
   commitMeta: null, // banner metadata for the current commit scope; tags comments with their commit
+  only: null, // walkthrough file view: the one path the stream shows
   ignoreWs: false, // `git diff -w`: a reindent should not read as a rewrite
 };
 
@@ -682,6 +683,7 @@ async function setScope(scope, name, keepCommits, fromTimeline) {
   // The stream shows every selected file, so there is nothing to "open" — the
   // first path is only the cursor j/k and the viewed toggle start from.
   S.selFile = files.length ? files[0].path : null;
+  if (window.Walk) Walk.onScope(); // the walkthrough is re-checked against the new file set
 }
 
 // ---------------------------------------------------------------------------
@@ -821,8 +823,11 @@ function setViewed(path, on) {
 /* Selection and collapse are per scope for the same reason viewed is, and they
    are stored as the *exceptions*: an empty `desel` means the whole review is in
    the stream, which is what a fresh scope should show. */
-const isSelected = (path) => !S.desel.has(viewKey(path));
+/* The walkthrough's file view narrows the stream to one file through `S.only`,
+   leaving the reader's own show/hide choices (`S.desel`, which is saved) alone. */
+const isSelected = (path) => (S.only ? path === S.only : !S.desel.has(viewKey(path)));
 function setSelected(path, on) {
+  if (S.only) return; // the walkthrough's one-file view is not the reader's saved choice to change
   const k = viewKey(path);
   on ? S.desel.delete(k) : S.desel.add(k);
   changed(); // render() → renderDiff() → buildItems() rebuilds the stream; no separate rebuild
@@ -830,6 +835,7 @@ function setSelected(path, on) {
   if (on) fetchStream(); // a newly selected file may not be loaded yet
 }
 function selectAll(on) {
+  if (S.only) return;
   for (const f of S.files) {
     const k = viewKey(f.path);
     on ? S.desel.delete(k) : S.desel.add(k);
@@ -1035,7 +1041,7 @@ $("#fileTree").addEventListener("click", (e) => {
     return;
   }
   const f = e.target.closest(".tnode[data-file]");
-  if (f) scrollToFile(f.dataset.file);
+  if (f) window.Walk && Walk.isOn() ? Walk.openFile(f.dataset.file) : scrollToFile(f.dataset.file);
 });
 
 /** all / none, wherever it is drawn: the file pane's header, or an empty stream. */
@@ -1171,11 +1177,40 @@ function rebuildStream() {
   updateFoldToggle(); // fold changes and straggler loads land here without a render()
 }
 
+/**
+ * The walkthrough's file view: the stream shows just `path`, through the
+ * `isSelected` override, without touching the saved show/hide choices. The
+ * line cursor belongs to the file it was in, so a new file starts without one.
+ */
+function showOnly(path) {
+  if (S.tab !== "changes") setTab("changes");
+  if (S.only !== path) {
+    S.focus = null;
+    S.pendingFocusFile = null;
+    S.pinnedSeg = null;
+  }
+  S.only = path;
+  render();
+  fetchStream();
+  scrollToFile(path);
+}
+function clearOnly() {
+  if (!S.only) return;
+  S.only = null;
+  S.focus = null;
+  S.pendingFocusFile = null;
+  S.pinnedSeg = null;
+  render();
+}
+
 /** Sidebar click / j/k target: make sure it's in the stream, then go there. */
 function scrollToFile(path) {
   S.pendingFocusFile = null; // navigating away cancels any pending anchor for the old target
   if (S.tab === "tree") return selectTreeFile(path);
-  if (!isSelected(path)) return setSelected(path, true), scrollToFile(path);
+  if (!isSelected(path)) {
+    if (S.only) return; // the walkthrough shows one file; another one is not on screen to scroll to
+    return setSelected(path, true), scrollToFile(path);
+  }
   /* Nothing else guarantees the stream matches this tab: the File Tree branch
      of buildItems() clears the segments, setTab rebuilds nothing, and at boot
      renderDiff returns before buildItems while there is no selected file. An
@@ -2441,7 +2476,12 @@ $("#cpList").addEventListener("click", async (e) => {
   if (!it) return;
   const a = S.ann.find((x) => x.id === it.dataset.id);
   if (!a) return;
-  if (S.selFile !== a.file) {
+  if (window.Walk && Walk.isOn()) {
+    // Walkthrough: open the file's own page. A comment on a file outside this
+    // scope has nothing on screen to land on, and the File Tree tab is hidden.
+    if (!S.files.some((f) => f.path === a.file)) return;
+    Walk.openFile(a.file);
+  } else if (S.selFile !== a.file) {
     if (!S.files.some((f) => f.path === a.file)) setTab("tree");
     await scrollToFile(a.file);
   }
@@ -2489,6 +2529,7 @@ function openModal(decision) {
       : n
       ? `${n} comment${n === 1 ? "" : "s"} will be sent to your agent session.` + coverage
       : "No line comments yet — write an overall summary below, or use Approve instead.";
+  if (decision !== "approved" && window.Walk) $("#modalSub").textContent += Walk.sendNote();
   $("#modalConfirm").disabled = decision !== "approved" && !n && !$("#modalSummary").value.trim();
   $("#modalConfirm").textContent = decision === "approved" ? "Approve" : "Send to agent";
   $("#modalList").innerHTML = S.ann
@@ -2705,6 +2746,7 @@ function dismiss() {
     fileFilter: document.activeElement === $("#fileFilter"),
   });
   if (id) DISMISS[id]();
+  return !!id;
 }
 
 document.addEventListener("keydown", (e) => {
@@ -2719,7 +2761,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (e.key === "Escape") {
-    dismiss();
+    if (!dismiss() && window.Walk) Walk.escape();
     return;
   }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
@@ -2728,6 +2770,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (typing) return;
+  if (window.Walk && Walk.key(e)) return;
   /* After the `typing` guard, deliberately: inside a comment box ⌘Z is the
      browser's own undo, and taking that away to restore a different comment
      would be the more surprising of the two. */
@@ -2818,9 +2861,15 @@ document.addEventListener("keydown", (e) => {
   loadDraft();
   render();
   await loadCommits(false); // the initial scope below owns what gets shown
-  if (await resumeWhere()) return;
-  await setScope({ type: "worktree" }, "Local Changes");
-  if (!S.files.length && S.ov.base) {
+  // A walkthrough describes the branch against its base, so that is what opens,
+  // whatever was left in the working tree or reviewed last time.
+  if (S.ov.walkthrough && S.ov.base) {
     await setScope({ type: "range", base: S.ov.base.ref, head: "HEAD" }, "Branch");
+  } else if (!(await resumeWhere())) {
+    await setScope({ type: "worktree" }, "Local Changes");
+    if (!S.files.length && S.ov.base) {
+      await setScope({ type: "range", base: S.ov.base.ref, head: "HEAD" }, "Branch");
+    }
   }
+  if (window.Walk) await Walk.init();
 })();
