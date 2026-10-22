@@ -93,7 +93,11 @@ function measure(nodes) {
 
 // --- layout --------------------------------------------------------------------
 
-async function layout(input, palette) {
+/* How big a laid-out graph can be drawn in the box: the fit zoom, capped
+   where fitView caps it. */
+const fitZoom = (g, box) => Math.min(box.w / Math.max(g.width, 1), box.h / Math.max(g.height, 1), 1.1);
+
+async function layout(input, palette, box) {
   const heights = measure(input);
   const kids = new Map();
   for (const n of input) if (n.parent) (kids.get(n.parent) || kids.set(n.parent, []).get(n.parent)).push(n);
@@ -115,7 +119,14 @@ async function layout(input, palette) {
       labels: e.kind === "block" && e.label ? [{ text: e.label, width: labelW(e.label), height: 20 }] : [],
     })),
   };
-  const out = await elk.layout(graph);
+  /* Left to right reads best, but a wide flow in a tall window leaves most of
+     the screen empty and the boxes tiny. When the width is what limits it,
+     also try top to bottom and keep whichever draws the boxes bigger. */
+  let out = await elk.layout(graph);
+  if (box && out.width / Math.max(out.height, 1) > box.w / box.h) {
+    const down = await elk.layout({ ...graph, layoutOptions: { ...LAYOUT, "elk.direction": "DOWN" } });
+    if (fitZoom(down, box) > fitZoom(out, box) * 1.4) out = down; // only when clearly bigger: left to right reads better
+  }
 
   const byId = new Map(input.map((n) => [n.id, n]));
   const abs = new Map([["root", { x: 0, y: 0 }]]);
@@ -233,7 +244,8 @@ async function mount(el, props) {
   const input = props.nodes.slice();
   input.edgesIn = props.edges;
   for (const n of input) if (n.kind !== "group") n.onOpenTest = props.onOpenTest;
-  const { nodes, edges } = await layout(input, props.palette);
+  const r = el.getBoundingClientRect();
+  const { nodes, edges } = await layout(input, props.palette, r.width && r.height ? { w: r.width, h: r.height } : null);
   if (!el.isConnected) return null; // the page moved on while ELK worked
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const nodeEl = (id) => el.querySelector(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
