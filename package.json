@@ -1,7 +1,7 @@
 {
   "name": "diffotator",
-  "version": "0.1.0",
-  "description": "Fork-style git diff viewer in the browser, with line annotations that get sent back to your Claude Code session.",
+  "version": "2.0.0",
+  "description": "Review a big change as a walkthrough — summary, domain background and a map of the change — then send line comments back to your Claude Code session.",
   "bin": { "diffotator": "bin/diffotator.js" },
   "main": "src/server.js",
   "type": "commonjs",

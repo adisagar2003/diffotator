@@ -2,19 +2,52 @@
 
 # diffotator
 
-**Fork's diff viewer, Plannotator's agent loop.**
+**Review a 100-file change like a map, not a list — then send the comments back to your agent.**
 
-Review your coding agent's work in a real git client — then send the comments
-straight back to the agent.
+diffotator opens every review on a **walkthrough**: what the change does, the
+domain words you need, and a map of the change you drill into like web pages.
+Under it sits a real git client. Your comments go straight back to Claude Code.
 
 [![docs](https://img.shields.io/badge/diffotator.vercel.app-4fae63?style=flat-square&label=docs)](https://diffotator.vercel.app)
-[![dependencies](https://img.shields.io/badge/dependencies-0-4fae63?style=flat-square)](package.json)
+[![dependencies](https://img.shields.io/badge/install--time%20dependencies-0-4fae63?style=flat-square)](package.json)
+[![version](https://img.shields.io/badge/version-2.0.0-4a8cf7?style=flat-square)](https://github.com/adisagar2003/diffotator/releases)
 [![node](https://img.shields.io/badge/node-%E2%89%A518-666?style=flat-square)](package.json)
 [![license](https://img.shields.io/badge/license-MIT-666?style=flat-square)](#license)
 
-<img src="site/screenshot.jpg" width="900" alt="diffotator reviewing a TypeScript change: file list on the left, split diff on the right, and a review comment threaded under the line it discusses">
+<img src="site/shot-walkthrough.png" width="900" alt="diffotator's walkthrough: a summary of the change and a Know this first panel above a map of nested blocks, files and their tests, joined by labelled arrows">
 
 </div>
+
+## The walkthrough (new in 2.0)
+
+Big changes are hard to review because a file list has no shape. The walkthrough
+gives it one.
+
+- **Home** — *What this change does* (summary, key changes, decisions, and the one
+  place to look hardest) beside *Know this first* (the domain background, with links
+  to the docs it came from). Below them, the map.
+- **The map** — the change grouped into blocks by behaviour, drawn with
+  [React Flow](https://reactflow.dev) and laid out by [ELK](https://eclipse.dev/elk/)
+  so arrows route around boxes instead of through them. Every box shows what is
+  inside it: blocks hold sub-blocks or files, files hold their tests. Labelled
+  arrows say how blocks connect; dashed arrows trace file-to-file calls. Hover a box
+  (or reach it with the arrow keys) and its arrows light up while the rest fade.
+- **Drill in like a website** — click a block and the map becomes that block; click a
+  file and its diff opens in the same spot; **← Back**, the breadcrumb or the browser's
+  Back return. Commits and domain docs open in place too.
+- **Keyboard first** — arrows move between boxes, `⏎` opens, `1`–`9` jump, `⌫` goes
+  back, `j`/`k` walk files in walkthrough order (tests right after their file), `⇧T`
+  flips between a file and its tests, `/` or `⌘K` finds any file. `?` lists them all.
+- **Classic** is one click (or `⇧C`) away — everything below still works as before.
+
+Claude writes the walkthrough. Ask *"Use diffotator to open this MR &lt;link&gt;"* and the
+`/diffotator` command checks the MR out into a temporary worktree, reads the diff, the
+ticket and your repo's own docs (`CONTEXT.md`, `AGENTS.md`, a handbook), writes the
+walkthrough, and opens it. On someone else's MR it never edits their branch: your
+`question:` comments are answered in chat, and the rest come back as draft review
+comments that are posted only when you say so.
+
+No walkthrough? diffotator still opens on the map, grouped by folder.
 
 ## What it is
 
@@ -26,8 +59,8 @@ agent acts on. Same contract as [Plannotator](https://plannotator.ai), without t
   every file at any revision — so you can comment on code the change never touched.
 - **Comments are instructions.** [Conventional Comments](https://conventionalcomments.org)
   labels, a blocking flag, optional suggested code, delivered as markdown on stdout.
-- **Nothing to install into your repo.** One Node process, no dependencies, no config.
-  It reads git and exits when you're done.
+- **Nothing to install into your repo.** One Node process, no install-time
+  dependencies, no config. It reads git and exits when you're done.
 
 ## Install
 
@@ -39,7 +72,9 @@ cp claude/diffotator.md ~/.claude/commands/diffotator.md  # the /diffotator comm
 diffotator hook --install                                 # optional: auto-review, below
 ```
 
-No dependencies. Node 18+, git. `node test.js` runs the checks.
+No `npm install`: Node 18+ and git are all it needs. The walkthrough map's React,
+React Flow and ELK ship prebuilt in `web/vendor/` (rebuild with
+`scripts/build-vendor.sh` after editing `vendor-src/`). `node test.js` runs the checks.
 
 ## Use
 
@@ -47,6 +82,7 @@ No dependencies. Node 18+, git. `node test.js` runs the checks.
 diffotator                       # review the working tree
 diffotator --base origin/main    # review the branch against a base
 diffotator -C ../other-repo
+diffotator --base origin/main --walkthrough walk.json   # open on an agent-written walkthrough
 ```
 
 `--base` pins the base ref used for branch-vs-base — it reaches git, not just the
@@ -63,8 +99,9 @@ on stdout becomes the agent's next input.
 
 <img src="site/shot-send.jpg" width="900" alt="The send dialog: an optional overall summary above the two comments about to be sent to the agent">
 
-No PR fetching: `gh pr checkout 123` (or `glab mr checkout 123`), then
-`diffotator --base origin/main`.
+To review an MR or PR, give `/diffotator` its link — it fetches it into a temporary
+worktree and writes the walkthrough. By hand: `glab mr checkout 123` (or
+`gh pr checkout 123`), then `diffotator --base origin/main`.
 
 ## Reviews that fire by themselves
 
@@ -140,6 +177,10 @@ touched.
 next · `s` split/unified · `f` full file · `t` comments · `/` filter files ·
 `⌘F` find in file · `⌘⏎` save/send · `Esc` close
 
+Walkthrough adds: `←↑→↓` move between boxes · `⏎` open · `1`–`9` open box N ·
+`⌫`/`Esc` back · `g` home · `0` fit · `+`/`−` zoom · `m` summary · `⇧T` file ↔ tests ·
+`/` or `⌘K` go to file · `h` commits · `⇧C` Classic
+
 Windowing means only the visible rows exist in the DOM, so the browser's own Find
 cannot see the file — `⌘F` opens ours instead.
 
@@ -161,7 +202,8 @@ This does the opposite:
 ## Not built
 
 Staging, committing, push/pull, rebase, blame, merge conflicts, image diffs — use Fork
-for those. No GitHub/GitLab PR fetching either.
+for those. diffotator itself never talks to GitHub or GitLab; the `/diffotator`
+command does that, through `gh`/`glab`, and only posts when you say so.
 
 ## Git shapes that bite
 
