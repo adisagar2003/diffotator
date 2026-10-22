@@ -50,7 +50,7 @@
   <section id="requirements">
     <h2>Requirements</h2>
     <p>Node 18 or newer, and <code>git</code> on your <code>PATH</code>. That's the whole list —
-       there is no <code>npm install</code>. The walkthrough map's React, React Flow and ELK ship
+       diffotator has no runtime dependencies. The walkthrough map's React, React Flow and ELK ship
        prebuilt in <code>web/vendor/</code>.</p>
     <p class="dim">macOS, Linux and Windows. The browser is whatever <code>open</code> /
        <code>xdg-open</code> / <code>start</code> launches.</p>
@@ -58,28 +58,23 @@
 
   <section id="install">
     <h2>Install</h2>
-    <p>Clone the <a href="https://github.com/adisagar2003/diffotator">repository</a>, then link
-       the binary and the slash command:</p>
-<pre><code>git clone https://github.com/adisagar2003/diffotator.git
-cd diffotator
-
-<span class="c"># link the CLI and install the /diffotator command</span>
-ln -sf "$PWD/bin/diffotator.js" ~/.local/bin/diffotator
-cp claude/diffotator.md ~/.claude/commands/diffotator.md
+    <p>The same on macOS, Linux and Windows:</p>
+<pre><code>npm install -g diffotator
+diffotator setup            <span class="c"># teach your agent the /diffotator command</span>
 
 <span class="c"># optional: open a review automatically after every turn</span>
 diffotator hook --install</code></pre>
-    <p>There is nothing to build and nothing to install into the repository you review —
-       the clone <i>is</i> the install.</p>
-    <p>Check it resolves:</p>
-<pre><code>$ diffotator --help</code></pre>
-    <div class="note">
-      <b>Make sure <code>~/.local/bin</code> is on your PATH.</b> If <code>diffotator</code> isn't
-      found, add <code>export PATH="$HOME/.local/bin:$PATH"</code> to your shell profile.
-    </div>
-    <p>Run the test suite if you want to confirm the git layer behaves on your machine:</p>
-<pre><code>$ node test.js
-ok — all checks passed</code></pre>
+    <p><code>diffotator setup</code> installs the command for Claude Code (in
+       <code>~/.claude/commands/</code>) and prints the path of the instructions file, so you can
+       add it to any other agent's rules. Nothing is installed into the repository you review.</p>
+    <p><b>Upgrade:</b> <code>npm update -g diffotator</code>, then <code>diffotator setup</code> again
+       so your agent gets the new instructions. <b>Just trying it?</b> <code>npx diffotator</code> runs it
+       without installing.</p>
+    <h3>From source</h3>
+<pre><code>git clone https://github.com/adisagar2003/diffotator.git
+cd diffotator
+npm link        <span class="c"># puts the diffotator command on your PATH</span>
+node test.js    <span class="c"># ok — all checks passed</span></code></pre>
   </section>
 
   <section id="claude-code">

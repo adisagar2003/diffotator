@@ -7,12 +7,15 @@ const os = require("os");
 const G = require("../src/git");
 const { createServer } = require("../src/server");
 const hook = require("../src/hook");
+const { browserCommand, setupAgent } = require("../src/platform");
 
 const HELP = `
 diffotator — Fork-style git review in the browser, annotations back to your agent.
 
 Usage:
   diffotator [review] [options]      Open a review now
+  diffotator setup                   Teach your agent the /diffotator command
+                                     (run it again after every upgrade)
   diffotator hook                    Stop-hook mode (reads hook JSON on stdin)
   diffotator hook --install          Add the Stop hook to ~/.claude/settings.json
   diffotator hook --uninstall        Remove it again
@@ -66,9 +69,18 @@ function parseArgs(argv) {
 }
 
 function openBrowser(url) {
-  const cmd =
-    process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-  execFile(cmd, [url], () => {});
+  const [cmd, args] = browserCommand(process.platform, url);
+  execFile(cmd, args, () => {});
+}
+
+function setup() {
+  const { installed, source } = setupAgent();
+  const say = (s = "") => process.stdout.write(s + "\n");
+  say(installed ? `Claude Code: installed the /diffotator command (${installed})` : "Claude Code: not found (no ~/.claude folder), skipped.");
+  say("Another agent? Add this file to its instructions:");
+  say(`  ${source}`);
+  say();
+  say("Then ask your agent: use diffotator to review <pull request link>");
 }
 
 // The browser needs a moment to paint its confirmation screen before the port
@@ -135,6 +147,7 @@ function installHook(remove) {
 
 async function main() {
   const argv = process.argv.slice(2);
+  if (argv[0] === "setup") return setup();
   if (argv[0] === "hook") {
     if (argv.includes("--install")) return installHook(false);
     if (argv.includes("--uninstall")) return installHook(true);
