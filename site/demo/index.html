@@ -26,7 +26,7 @@
   <div class="tb-right">
     <button id="btnClassic" class="btn ghost" title="Today's full diff view (⇧C)">Classic</button>
     <button id="btnComments" class="btn ghost" title="Toggle comments panel (t)">
-      <span class="ico">🗨</span> Comments <span id="cmtCount" class="count">0</span>
+      <span class="ico">🗨</span> <span class="lbl">Comments</span> <span id="cmtCount" class="count">0</span>
     </button>
     <button id="btnHelp" class="btn ghost" title="Keyboard shortcuts (?)">?</button>
     <button id="btnClose" class="btn">Close</button>
@@ -44,6 +44,7 @@
   <section id="content">
     <div id="walkBar">
       <button id="walkBack" class="btn ghost" title="Back (⌫ or Esc)">← Back</button>
+      <button id="walkFiles" class="btn ghost wk-mobile-only" aria-expanded="false" aria-controls="leftPane">Files</button>
       <nav id="walkCrumbs" aria-label="Where you are"></nav>
       <div id="walkInfo"></div>
       <div class="grow"></div>

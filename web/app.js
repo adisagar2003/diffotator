@@ -2317,8 +2317,8 @@ function openPopover(anchor, file, side, line) {
   const pop = $("#popover");
   pop.hidden = false;
   const r = anchor.getBoundingClientRect();
-  const w = 430;
-  let left = Math.min(r.left, window.innerWidth - w - 16);
+  const w = Math.min(430, window.innerWidth - 16); // a phone is narrower than the popover
+  let left = Math.min(r.left, window.innerWidth - w - 8);
   let top = r.bottom + 6;
   if (top + pop.offsetHeight > window.innerHeight - 10) top = Math.max(46, r.top - pop.offsetHeight - 6);
   pop.style.left = Math.max(8, left) + "px";
