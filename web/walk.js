@@ -86,6 +86,13 @@
     click("#walkBack", back);
     click("#walkHead", toggleHead);
     click("#walkCommits", () => go({ kind: "commits" }));
+    click("#walkFiles", () => files(!document.body.classList.contains("wk-files-open")));
+    // Tapping outside the slide-over file list closes it.
+    document.addEventListener("click", (e) => {
+      if (document.body.classList.contains("wk-files-open") && !e.target.closest("#leftPane, #walkFiles")) files(false);
+    });
+    // A phone is too narrow for side-by-side diffs.
+    if (matchMedia("(max-width: 900px)").matches && S.view === "split") setView("unified");
     $("#walkInfo").addEventListener("click", (e) => {
       const a = e.target.closest("a[href^='#/']");
       if (a) e.preventDefault(), (location.hash = a.getAttribute("href"));
@@ -140,8 +147,15 @@
     return true;
   }
 
+  /** Phones only: the file list as a panel over the map. */
+  function files(open) {
+    document.body.classList.toggle("wk-files-open", open);
+    $("#walkFiles").setAttribute("aria-expanded", String(open));
+  }
+
   function show() {
     if (!W.ready || !isOn()) return;
+    files(false);
     let r = WT.parseRoute(location.hash);
     if (!valid(r)) {
       r = HOME;
@@ -469,6 +483,7 @@
   function escape() {
     if (!isOn()) return false;
     if (closeOverlay()) return true;
+    if (document.body.classList.contains("wk-files-open")) return files(false), true;
     if (W.route.kind === "home") return false;
     back();
     return true;

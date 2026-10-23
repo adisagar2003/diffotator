@@ -17,7 +17,9 @@
     };
     const io = new IntersectionObserver(
       (entries) => entries.forEach((e) => e.isIntersecting && show(e.target)),
-      { rootMargin: "-45% 0px -45% 0px" }
+      // On phones the scene is pinned to the top, so a step plays once its text
+      // reaches the space below the scene rather than the middle of the screen.
+      { rootMargin: matchMedia("(max-width: 900px)").matches ? "-62% 0px -28% 0px" : "-45% 0px -45% 0px" }
     );
     steps.forEach((s) => io.observe(s));
     show(steps[0]);

@@ -24,7 +24,8 @@ main section{padding:104px 24px;max-width:var(--wrap);margin:0 auto}
 .demo-head p{color:var(--dim);font-size:18px;max-width:52ch}
 .window{border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#0e0f12;box-shadow:0 40px 100px -40px #000,0 0 0 1px #ffffff05}
 .window iframe{display:block;width:100%;height:min(820px,86vh);border:0;background:#1b1c1e}
-.small-screen{display:none;color:var(--muted);font-size:15px;margin-top:12px}
+.small-screen{display:none;margin-top:14px;font-size:16px}
+.small-screen a{color:var(--go);font-weight:600}
 
 /* ---------- how it works: one authored motion scene ---------- */
 .how h2{margin-bottom:56px}
@@ -125,12 +126,20 @@ main section{padding:104px 24px;max-width:var(--wrap);margin:0 auto}
 @media (max-width:900px){
   main section{padding:72px 20px}
   .how-grid{grid-template-columns:1fr;gap:0}
-  .stage{order:-1;top:72px;height:300px;z-index:2}
+  /* pinned under the nav; the page edge it carries hides text scrolling beneath */
+  .stage{order:-1;top:72px;height:300px;z-index:2;box-shadow:0 0 0 12px var(--bg),0 -24px 0 12px var(--bg)}
   .steps li{min-height:56vh}
   .promises{grid-template-columns:1fr;gap:44px}
   .small-screen{display:block}
-  .window iframe{height:640px}
+  .code pre{white-space:pre-wrap;overflow-wrap:anywhere;padding-top:48px;font-size:14px}
+  .window iframe{height:78vh;height:78svh;min-height:520px}
   .st-files span{font-size:10.5px;padding:3px 7px}
+  .st-term{font-size:13px}
+  /* step 4 on a phone: just the question and the answer, no room for the code too */
+  .stage[data-step="4"] .st-file{transform:none;background:transparent;border-color:transparent;box-shadow:none}
+  .stage[data-step="4"] .st-file-bar,.stage[data-step="4"] .st-diff{opacity:0;transition:opacity .3s var(--ease)}
+  .stage[data-step="4"] .st-term{left:5%;right:5%;bottom:6%}
+  .stage[data-step="4"] .st-comment{left:0;top:4%}
   .st-box b{font-size:12px}
 }
 @media (prefers-reduced-motion:reduce){
