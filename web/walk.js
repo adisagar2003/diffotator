@@ -17,6 +17,8 @@
   const W = {
     ready: false,
     wt: null,
+    rank: [],
+    risk: new Map(),
     idx: new Map(),
     order: [],
     route: HOME,
@@ -75,6 +77,9 @@
     if (window.Ask) Ask.confidence(wt.confidence);
     W.idx = WT.index(wt.blocks);
     W.order = WT.fileOrder(wt.blocks);
+    W.rank = WT.rank(wt, S.files);
+    W.risk = new Map(W.rank.map((r) => [r.path, r]));
+    renderFileTree(); // its risk dots and Risk order come from the new rank
     return true;
   }
 
@@ -234,9 +239,29 @@
     if (!at) return (box.innerHTML = "");
     const area = WT.findBlock(W.wt.blocks, at.ids);
     const link = (p, cls) => `<a href="${esc(WT.formatRoute({ kind: "file", file: p }))}" class="${cls}" title="${esc(p)}">${esc(baseName(p))}</a>`;
+    const rk = W.risk.get(r.file);
     box.innerHTML =
       `<span class="wk-chip" style="--c:${colorOf(at.tone)}">${esc(area ? area.label : "")}</span>` +
+      (rk && rk.level !== "low" ? `<span class="wk-risk">${riskDot(rk)}${RISK_WORD[rk.level]}: ${esc(rk.why.join(" · "))}</span>` : "") +
       (at.owner ? `<span>Test for ${link(at.owner, "wk-code")}</span>` : at.tests.length ? `<span>Tested by ${at.tests.map((t) => link(t, "wk-test")).join(", ")}</span>` : "");
+  }
+
+  // --- review order: which files to read carefully ---------------------------------
+
+  const RISK_WORD = { high: "Read carefully", medium: "Worth a look", low: "Skim" };
+  const riskDot = (rk) => `<span class="rk rk-${rk.level}" title="${esc(RISK_WORD[rk.level] + ": " + rk.why.join(" · "))}"></span>`;
+
+  /** The home page's "Review first" list: the top of `WT.rank`, or a plain "nothing stands out". */
+  function reviewFirst() {
+    if (!W.rank.length) return "";
+    const top = W.rank.filter((r) => r.level !== "low");
+    if (!top.length) return `<div class="wk-rank"><b>Review first</b> No file stands out: each is small, or docs and tests.</div>`;
+    const items = top
+      .slice(0, 5)
+      .map((r) => `<li><a href="${esc(WT.formatRoute({ kind: "file", file: r.path }))}" title="${esc(r.path)}">${riskDot(r)}${esc(baseName(r.path))}</a> <span>${esc(r.why.join(" · "))}</span></li>`)
+      .join("");
+    const more = top.length > 5 ? `<p>+${top.length - 5} more: sort the file list by <b>Risk</b>.</p>` : "";
+    return `<div class="wk-rank"><b>Review first</b><ol>${items}</ol>${more}</div>`;
   }
 
   // --- home and blocks: the map ----------------------------------------------
@@ -247,6 +272,7 @@
     if (wt.fallback) {
       return `<div id="wkHead" class="wk-head wk-one"><div class="wk-card"><h2>This review</h2><h1>${title}</h1>
         <p>No walkthrough was written for this review, so the blocks below follow the folders.</p>
+        ${reviewFirst()}
         ${wt.error ? `<p class="wk-err">${esc(wt.error)}</p>` : ""}</div></div>`;
     }
     const mr = `<div class="wk-card wk-mr"><h2>What this change does ${wt.ticket ? `<span class="chip">${esc(wt.ticket)}</span>` : ""}</h2><h1>${title}</h1>
@@ -254,6 +280,7 @@
       ${wt.changes.length ? `<ul>${wt.changes.map((c) => `<li><b>${esc(c.label)}:</b> ${esc(c.text)}</li>`).join("")}</ul>` : ""}
       ${wt.decisions.map((d) => `<p class="wk-dec">Decision: ${esc(d)}</p>`).join("")}
       ${wt.lookHard ? `<div class="wk-look"><b>Look hardest at</b> ${esc(wt.lookHard)}</div>` : ""}
+      ${reviewFirst()}
       ${wt.error ? `<p class="wk-err">${esc(wt.error)}</p>` : ""}</div>`;
     const terms = wt.terms.length
       ? `<div class="wk-terms">${wt.terms
@@ -505,5 +532,15 @@
     escape,
     sendNote,
     openFile: (p) => go({ kind: "file", file: p }),
+    /** The file list's dot: the rank entry for a changed file, or null. */
+    riskDot: (p) => {
+      const rk = W.risk.get(p);
+      return rk && rk.level !== "low" ? riskDot(rk) : "";
+    },
+    /** `paths` with the ones to read carefully first; unranked ones (tests) keep their order at the end. */
+    byRisk: (paths) => {
+      const at = new Map(W.rank.map((r, i) => [r.path, i]));
+      return [...paths].sort((a, b) => (at.has(a) ? at.get(a) : 1e9) - (at.has(b) ? at.get(b) : 1e9));
+    },
   };
 })();

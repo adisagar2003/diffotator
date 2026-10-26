@@ -13,6 +13,7 @@
   const str = (v) => (typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "");
   const base = (p) => p.slice(p.lastIndexOf("/") + 1);
   const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+  const LEVELS = ["low", "medium", "high"]; // how carefully to read a file, least first
 
   /* Ids the walkthrough makes up itself. A block from the file that claims one
      is renamed, so a generated block can never collide with an authored one. */
@@ -122,6 +123,16 @@
       return [{ from, to, label: str(l.label) }];
     });
 
+    // The agent's own read of which files need a careful look; `rank` merges it
+    // with what the paths and sizes say.
+    const rated = new Set();
+    const risk = (Array.isArray(raw.risk) ? raw.risk : []).flatMap((r) => {
+      const level = isObj(r) ? str(r.level).toLowerCase() : "";
+      if (!LEVELS.includes(level) || !changed.has(r.path) || rated.has(r.path)) return [];
+      rated.add(r.path);
+      return [{ path: r.path, level, why: str(r.why) }];
+    });
+
     const mr = isObj(raw.mr) && str(raw.mr.url) ? { iid: str(raw.mr.iid), url: str(raw.mr.url) } : null;
     // How sure the agent is that this is safe to merge. A reason not marked ok
     // reads as a concern: better to flag what is fine than to reassure wrongly.
@@ -152,6 +163,7 @@
       links,
       mr,
       confidence,
+      risk,
       fallback: false,
       error,
     };
@@ -160,8 +172,76 @@
   function fallbackWalkthrough(paths, error) {
     return {
       title: "", ticket: "", summary: "", changes: [], decisions: [], lookHard: "", domain: [], terms: [],
-      blocks: fallback(paths), edges: [], links: [], mr: null, confidence: null, fallback: true, error,
+      blocks: fallback(paths), edges: [], links: [], mr: null, confidence: null, risk: [], fallback: true, error,
     };
+  }
+
+  // --- review order ------------------------------------------------------------
+
+  /* Paths that need a careful human read whatever the diff looks like: what runs
+     with the repo's secrets, moves money, or is hard to undo. A file on one of
+     these stays high even if the agent rates it lower.
+     ponytail: matched on the path alone, so `tokenizer.js` reads as auth; the
+     agent's `risk` entries are the fix for a file the paths misjudge. */
+  const SENSITIVE = [
+    [/(^|\/)(\.github\/workflows|\.circleci|\.buildkite)\/|(^|\/)(\.gitlab-ci\.ya?ml|Jenkinsfile|azure-pipelines\.ya?ml)$/i, "CI workflow"],
+    [/(^|[\/_.-])(auth|login|session|token|password|secret|credential|crypto|permission|oauth|jwt|sso)/i, "auth or secrets"],
+    [/(^|[\/_.-])(billing|payment|invoice|stripe|checkout|subscription|refund)/i, "billing or payments"],
+    [/(^|\/)migrations?\/|\.sql$|(^|\/)schema\.prisma$/i, "database migration"],
+    [/(^|[\/_.-])(install|updater|auto-?update|release|publish)|(^|\/)(Dockerfile|docker-compose[^/]*|[^/]+\.tf)$/i, "install, release or deploy"],
+  ];
+  const DEPS = /(^|\/)(package\.json|requirements[^/]*\.txt|pyproject\.toml|go\.mod|Cargo\.toml|Gemfile|pom\.xml|build\.gradle(\.kts)?)$/;
+  const QUIET = /\.(md|mdx|txt|rst|png|jpe?g|gif|svg|ico|webp|snap)$|(^|\/)docs?\/|(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|go\.sum)$/i;
+  const TEST = /(^|\/)(__tests__|tests?|spec|e2e)\/|(^|\/|[._-])(tests?|spec)\.[^/]+$/i;
+  const stem = (p) => base(p).replace(/\..*$/, ""); // cart.service.ts → cart
+
+  /**
+   * The changed files a person should read carefully, most first; the rest can
+   * be skimmed. Each gets a level (high, medium, low), a score and the reasons:
+   * a sensitive path, a dependency change, its size, no test changed with it,
+   * sitting in the block the agent marked riskiest. The agent's `risk` entries
+   * set the level outright, except that a sensitive path never drops below high.
+   * Tests are left out (they are read with the file they check) unless the
+   * agent rated one. `files` are the page's files: path, additions, deletions, status.
+   */
+  function rank(wt, files) {
+    const idx = index(wt.blocks);
+    const big = new Set();
+    const markBig = (list, on) =>
+      list.forEach((b) => {
+        if (b.files) (on || b.big) && b.files.forEach((f) => big.add(f.path));
+        else markBig(b.children, on || b.big);
+      });
+    markBig(wt.blocks, false);
+    const said = new Map((wt.risk || []).map((r) => [r.path, r]));
+    const isTest = (p) => TEST.test(p) || !!(idx.get(p) || {}).owner;
+    const testStems = new Set(files.map((f) => f.path).filter(isTest).map(stem));
+    const out = [];
+    for (const f of files) {
+      const p = f.path, at = idx.get(p), a = said.get(p);
+      if (isTest(p) && !a) continue;
+      const add = f.additions || 0, del = f.deletions || 0, churn = add + del;
+      const why = [];
+      let score = 0, floor = 0;
+      if (QUIET.test(p)) why.push("docs, assets or a lockfile");
+      else {
+        for (const [re, label] of SENSITIVE) if (re.test(p)) (score += 3), (floor = 2), why.push(label);
+        if (DEPS.test(p)) (score += 2), why.push("changes dependencies");
+        if (churn > 300) (score += 2), why.push(`large change (+${add} −${del})`);
+        else if (churn > 50) (score += 1), why.push(`mid-size change (+${add} −${del})`);
+        const tested = (at && at.tests.length) || testStems.has(stem(p));
+        if (!tested && churn > 50 && f.status !== "deleted") (score += 1), why.push("no test changed with it");
+        if (big.has(p)) (score += 1), why.push("in the block marked riskiest");
+      }
+      let level = score >= 3 ? 2 : score >= 1 ? 1 : 0;
+      if (a) {
+        level = Math.max(LEVELS.indexOf(a.level), floor);
+        if (a.why) why.unshift(a.why);
+      }
+      out.push({ path: p, level: LEVELS[level], score, why, add, del });
+    }
+    const lv = (r) => LEVELS.indexOf(r.level);
+    return out.sort((x, y) => lv(y) - lv(x) || y.score - x.score || y.add + y.del - (x.add + x.del) || (x.path < y.path ? -1 : 1));
   }
 
   /**
@@ -369,4 +449,5 @@
   exp.fileOrder = fileOrder;
   exp.testTag = testTag;
   exp.buildGraph = buildGraph;
+  exp.rank = rank;
 })(typeof module === "object" && module.exports ? module.exports : (window.Walkthrough = {}));

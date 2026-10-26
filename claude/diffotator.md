@@ -60,7 +60,8 @@ what it can and puts any changed file you leave out in an "Other" block.
     "level": "medium",
     "summary": "One sentence: how sure you are this is safe to merge, and the main reason.",
     "reasons": [{ "ok": true, "text": "Both paths have integration tests" }, { "ok": false, "text": "The migration has no way back" }]
-  }
+  },
+  "risk": [{ "path": "src/pricing/round.ts", "level": "high", "why": "every invoice total goes through it" }]
 }
 ```
 
@@ -76,6 +77,13 @@ what it can and puts any changed file you leave out in an "Other" block.
   (works, but something is untested or risky), `low` (likely broken, or too
   risky without changes). Give 2–5 `reasons`: `"ok": true` for what makes you
   sure, `"ok": false` for each worry. Never round up.
+- `risk` tells the reviewer which files to read carefully. diffotator already
+  ranks every file from its path (CI, auth, billing, migrations, installers),
+  its size and whether a test changed with it, and shows the top of that list
+  as *Review first*. Add an entry only where you know better: a small change
+  with a wide reach, or a scary-looking file that is safe. `high` = read every
+  line, `medium` = worth a look, `low` = skim; `why` is one short phrase. A CI,
+  auth, billing, migration or installer path stays high whatever you say.
 
 ## 4. Open it
 

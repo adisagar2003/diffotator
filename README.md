@@ -72,6 +72,23 @@ can read it). The review closes itself after 12 hours without use. Reviewing
 through a forwarded port in a cloud editor? Set `DIFFOTATOR_ALLOWED_HOSTS` to
 its host name.
 
+## Review first: files ranked by risk (new in 2.2)
+
+Not every file deserves the same attention. diffotator ranks the changed files so
+your careful reading goes where a mistake would cost the most:
+
+- **High** (red dot) — CI workflows, auth and secrets, billing, database
+  migrations, installers and release scripts, however small the change; or a large
+  change with no test changed beside it.
+- **Medium** (yellow dot) — dependency changes, mid-size changes, untested ones.
+- **Low** (no dot) — docs, assets, lockfiles and small edits. Skim them.
+
+The top five show on Home as **Review first**, each with its reasons; **Risk** in the
+file list sorts every file that way; a file's page says why it ranked where it did.
+Tests are left out — you read them with the file they check. Your agent can rate a
+file itself when it knows better (`risk` in the walkthrough), but a sensitive path
+never drops below High.
+
 ## What it is
 
 Browse commits, files and diffs like [Fork](https://git-fork.com), annotate any line,

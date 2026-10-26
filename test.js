@@ -168,6 +168,42 @@ assert.ok(
   );
   assert.strictEqual(conf({ level: "certain" }), null, "only high, medium or low");
   assert.strictEqual(conf("high"), null);
+
+  // Review order: which files need a careful read first.
+  const rp = [".github/workflows/ci.yml", "src/cart.js", "src/cart.test.js", "src/big.js", "README.md", "src/tiny.js", "src/tokens.js"];
+  const rwt = W.validate(
+    {
+      blocks: [{ id: "x", files: [{ path: "src/cart.js", tests: ["src/cart.test.js"] }, "src/big.js"] }],
+      risk: [
+        { path: "src/tiny.js", level: "High", why: "feeds every price" },
+        { path: "src/tokens.js", level: "low", why: "design tokens, not auth" },
+        { path: "src/tiny.js", level: "low" },
+        { path: "nope.js", level: "high" },
+        { path: "README.md", level: "urgent" },
+      ],
+    },
+    rp
+  );
+  assert.deepStrictEqual(
+    rwt.risk.map((r) => r.path + ":" + r.level),
+    ["src/tiny.js:high", "src/tokens.js:low"],
+    "risk: level normalised; first entry wins; unknown paths and levels dropped"
+  );
+  const sz = (p, add, del = 0) => ({ path: p, additions: add, deletions: del, status: "modified" });
+  const ranked = W.rank(rwt, [sz(".github/workflows/ci.yml", 2), sz("src/cart.js", 80), sz("src/cart.test.js", 40), sz("src/big.js", 400, 20), sz("README.md", 900), sz("src/tiny.js", 1), sz("src/tokens.js", 3)]);
+  const by = Object.fromEntries(ranked.map((r) => [r.path, r]));
+  assert.ok(!by["src/cart.test.js"], "tests are read with their file, not ranked");
+  assert.deepStrictEqual(W.rank(W.validate(null, ["test.js", "a/tests.py"]), [sz("test.js", 500), sz("a/tests.py", 500)]), [], "a file named test is a test too");
+  assert.strictEqual(by[".github/workflows/ci.yml"].level, "high", "a CI workflow is high however small");
+  assert.strictEqual(by["src/big.js"].level, "high", "large and untested");
+  assert.ok(by["src/big.js"].why.includes("no test changed with it"));
+  assert.strictEqual(by["src/cart.js"].level, "medium", "mid-size but tested");
+  assert.strictEqual(by["README.md"].level, "low", "docs stay low however long");
+  assert.strictEqual(by["src/tiny.js"].level, "high", "the agent can raise a file");
+  assert.strictEqual(by["src/tiny.js"].why[0], "feeds every price", "…and its reason comes first");
+  assert.strictEqual(by["src/tokens.js"].level, "high", "but a sensitive path never drops below high");
+  assert.deepStrictEqual(ranked.slice(-1).map((r) => r.path), ["README.md"], "low files go last");
+  assert.deepStrictEqual(W.rank(W.validate(null, ["a.js"]), [sz("a.js", 5)]).map((r) => r.level), ["low"], "the folder fallback ranks too");
   assert.deepStrictEqual(wt.mr, { iid: "7417", url: "https://gitlab.com/x/-/merge_requests/7417" });
   assert.deepStrictEqual(wt.terms, [{ term: "Rule cost", meaning: "m", source: "a/CONTEXT.md" }]);
   assert.deepStrictEqual(

@@ -59,7 +59,7 @@ const S = {
   treeOpen: new Set(),
   fileOpen: new Set(),
   filter: "",
-  listMode: true, // reviewing is "work the list of files"; browsing is a tree
+  listMode: "list", // reviewing is "work the list of files"; browsing is a tree; "risk" puts the careful reads first
   charW: 7.5,
   uiCharW: 6.2,
   popFor: null,
@@ -756,9 +756,10 @@ function renderFileTree() {
     };
   };
 
-  const flat = terms.length || (S.listMode && !isTreeTab);
+  const flat = terms.length || (S.listMode !== "tree" && !isTreeTab);
   if (flat) {
-    const hits = (terms.length ? paths.filter((p) => RM.matchFile(terms, descOf(p))) : paths).slice(0, 800);
+    const order = S.listMode === "risk" && !isTreeTab && window.Walk ? Walk.byRisk(paths) : paths;
+    const hits = (terms.length ? order.filter((p) => RM.matchFile(terms, descOf(p))) : order).slice(0, 800);
     box.innerHTML =
       hits.map((p) => fileRow(p, meta.get(p), 0, null)).join("") ||
       `<div class="empty-state">${terms.length ? "No match" : "No changes"}</div>`;
@@ -1016,6 +1017,7 @@ function fileRow(path, m, depth, label) {
     <span class="caret">${seen ? "✓" : ""}</span>
     ${box}
     ${code ? `<span class="st ${code}">${code === "q" ? "?" : code}</span>` : "📄"}
+    ${m && window.Walk ? Walk.riskDot(path) : ""}
     <span class="nm">${name}</span>
     ${n ? `<span class="cmt">🗨${n}</span>` : ""}
     ${stat}</div>`;
@@ -1070,14 +1072,16 @@ function updateFoldToggle() {
 }
 updateFoldToggle(); // scripts load after the DOM; seed the icon before any stream exists
 
-function setListMode(on) {
-  S.listMode = on;
-  $("#segList").classList.toggle("active", on);
-  $("#segTree").classList.toggle("active", !on);
+function setListMode(mode) {
+  S.listMode = mode;
+  $("#segList").classList.toggle("active", mode === "list");
+  $("#segTree").classList.toggle("active", mode === "tree");
+  $("#segRisk").classList.toggle("active", mode === "risk");
   renderFileTree();
 }
-$("#segList").onclick = () => setListMode(true);
-$("#segTree").onclick = () => setListMode(false);
+$("#segList").onclick = () => setListMode("list");
+$("#segTree").onclick = () => setListMode("tree");
+$("#segRisk").onclick = () => setListMode("risk");
 
 $("#fileFilter").addEventListener("input", (e) => {
   S.filter = e.target.value;
