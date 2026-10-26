@@ -16,6 +16,7 @@
 const crypto = require("crypto");
 const G = require("./git");
 const D = require("./drafts");
+const { formatEvent } = require("./talk");
 
 const OFF = /^(0|off|false|no)$/i;
 const DEFAULT_MIN_FILES = 3;
@@ -144,13 +145,15 @@ async function run({ openReview }) {
     return stopOutput(null);
   }
 
-  const { decision, output } = await openReview(d.root);
+  const ev = await openReview(d.root);
 
   // Record what was on screen either way: approving and then dismissing the
-  // next identical Stop should both stay quiet.
-  D.saveHookState(d.root, { reviewed: d.fingerprint, decision });
+  // next identical Stop should both stay quiet. A question counts too — the
+  // review is still open, and the agent hears the rest through `diffotator answer`.
+  D.saveHookState(d.root, { reviewed: d.fingerprint, decision: ev.type === "question" ? "asked" : ev.decision });
 
-  return stopOutput(decision === "annotated" && output ? output : null);
+  if (ev.type === "question") return stopOutput(formatEvent(ev));
+  return stopOutput(ev.decision === "annotated" && ev.output ? ev.output : null);
 }
 
 module.exports = { run, decide, fingerprint, config, stopOutput };

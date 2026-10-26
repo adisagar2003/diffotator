@@ -55,7 +55,12 @@ what it can and puts any changed file you leave out in an "Other" block.
     ], "edges": [{ "from": "recompute", "to": "landing", "label": "calls syncRuleAllocations" }] }
   ],
   "edges": [{ "from": "specs", "to": "backend", "label": "checks" }],
-  "links": [{ "from": "src/handlers/saveAdjustment.ts", "to": "src/costConfirmationService.ts", "label": "syncRuleAllocations" }]
+  "links": [{ "from": "src/handlers/saveAdjustment.ts", "to": "src/costConfirmationService.ts", "label": "syncRuleAllocations" }],
+  "confidence": {
+    "level": "medium",
+    "summary": "One sentence: how sure you are this is safe to merge, and the main reason.",
+    "reasons": [{ "ok": true, "text": "Both paths have integration tests" }, { "ok": false, "text": "The migration has no way back" }]
+  }
 }
 ```
 
@@ -66,11 +71,16 @@ what it can and puts any changed file you leave out in an "Other" block.
 - `edges` join sibling blocks and say how (a short verb phrase). `links` join
   files — an import or a call worth tracing. Only add links you checked.
 - Mark the riskiest block `"big": true`. Plain words everywhere; no filler.
+- `confidence` is your honest read of whether this is safe to merge, shown as
+  a chip at the top: `high` (small or well tested, nothing worrying), `medium`
+  (works, but something is untested or risky), `low` (likely broken, or too
+  risky without changes). Give 2–5 `reasons`: `"ok": true` for what makes you
+  sure, `"ok": false` for each worry. Never round up.
 
 ## 4. Open it
 
-Run in the background (it blocks until the reviewer submits, which can exceed
-the Bash timeout):
+Run in the background (it blocks until the reviewer asks something or
+submits, which can exceed the Bash timeout):
 
 `diffotator -C <dir> --base <base> --walkthrough <file>`
 
@@ -78,6 +88,12 @@ Tell the user the URL it prints on stderr, then wait for stdout.
 
 ## 5. Act on what comes back
 
+- `# Question from the reviewer` → they asked you something from the page; the
+  review is still open. Read the code it points at and answer in a few plain
+  sentences (markdown is fine), in the background again:
+  `diffotator answer -C <dir> --id <n> - <<'EOF'` … `EOF`
+  It shows them your answer, then waits for their next message — handle what it
+  prints the same way. Don't edit code because of a question; just answer.
 - `The user approved.` → done.
 - `Review session closed without feedback.` (or empty) → ask what they want.
 - A `# Code review feedback` document:

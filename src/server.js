@@ -8,6 +8,7 @@ const Scope = require("./scope");
 const { render } = require("./feedback");
 const D = require("./drafts");
 const W = require("./walkthrough");
+const { createTalk } = require("./talk");
 
 const WEB = path.join(__dirname, "..", "web");
 // The scope vocabulary is shared with the browser, so it is served out of src
@@ -152,12 +153,52 @@ const ROUTES = {
     return { markdown: render({ ...payload, repo: path.basename(root) }) };
   },
 
-  "POST /api/submit": async ({ root, body, submit }) => {
+  // --- asking the agent mid-review (see src/talk.js) -------------------------
+
+  "POST /api/ask": async ({ body, talk }) => {
+    const b = await body();
+    const text = typeof b.text === "string" ? b.text.trim().slice(0, 4000) : "";
+    if (!text) throw httpError(400, "a question needs some text");
+    const c = b.context && typeof b.context === "object" ? b.context : null;
+    const context =
+      c && typeof c.file === "string" && c.file
+        ? {
+            file: c.file.slice(0, 500),
+            side: c.side === "old" ? "old" : "new",
+            line: Number.isInteger(c.line) && c.line > 0 ? c.line : null,
+            text: typeof c.text === "string" ? c.text.slice(0, 500) : "",
+          }
+        : null;
+    return { id: talk.ask(text, context).id };
+  },
+
+  "GET /api/thread": async ({ talk }) => talk.thread(),
+
+  "GET /api/agent/ping": async ({ talk }) => ({ ok: true, finished: talk.finished() }),
+
+  "GET /api/agent/next": async ({ talk, q, agentDone }) => {
+    const ev = await talk.next(Math.min(+q.get("timeout") || 25000, 60000));
+    if (ev.type === "done") agentDone();
+    return ev;
+  },
+
+  "POST /api/agent/answer": async ({ body, talk }) => {
+    const b = await body();
+    const text = typeof b.text === "string" ? b.text.trim().slice(0, 20000) : "";
+    if (!text) throw httpError(400, "an answer needs some text");
+    const item = talk.answer(Number.isInteger(b.id) ? b.id : null, text);
+    if (!item) throw httpError(404, "no open question to answer");
+    return { id: item.id };
+  },
+
+  "POST /api/submit": async ({ root, body, submit, talk }) => {
     const payload = await body();
-    submit({
+    const result = {
       decision: payload.decision || "annotated",
       output: render({ ...payload, repo: path.basename(root) }),
-    });
+    };
+    submit(result);
+    talk.finish(result.decision, result.output);
     D.clearDraft(root);
     return { ok: true };
   },
@@ -173,9 +214,10 @@ const ROUTES = {
  *   `{decision, output}` when the reviewer submits. The caller owns teardown
  *   and process exit — this module knows nothing about either.
  */
-function createServer({ root, title, base, walkthrough }) {
+function createServer({ root, title, base, walkthrough, token = null, onAgentDone = () => {} }) {
   let onSubmit;
   const submitted = new Promise((resolve) => (onSubmit = resolve));
+  const talk = createTalk();
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
@@ -183,6 +225,21 @@ function createServer({ root, title, base, walkthrough }) {
     const q = url.searchParams;
     try {
       const route = ROUTES[`${req.method} ${p}`];
+      /* Who may call what. The agent's routes need the session's secret, which
+         only the agent's own commands can read. Everything else the page sends
+         must carry a custom header: a page on another site cannot add one
+         without the browser asking this server first, and it never says yes —
+         so no website can submit a review or put words in the agent's ear. */
+      // A page on another site that renamed itself to 127.0.0.1 (DNS rebinding)
+      // still sends its own name as Host, so only our own names get in.
+      if (!/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(req.headers.host || "")) {
+        throw httpError(403, "unknown host");
+      }
+      if (p.startsWith("/api/agent/")) {
+        if (!token || req.headers["x-diffotator-token"] !== token) throw httpError(403, "not this review's agent");
+      } else if (req.method === "POST" && req.headers["x-diffotator"] !== "1") {
+        throw httpError(403, "requests must come from the diffotator page");
+      }
       if (route) {
         return json(
           res,
@@ -195,6 +252,8 @@ function createServer({ root, title, base, walkthrough }) {
             q,
             body: () => readBody(req),
             submit: onSubmit,
+            talk,
+            agentDone: onAgentDone,
             get scope() {
               return Scope.parse(q.get("scope"));
             },
@@ -204,12 +263,17 @@ function createServer({ root, title, base, walkthrough }) {
       if (req.method === "GET" && !p.startsWith("/api/")) return serveStatic(p, res);
       res.writeHead(404).end("not found");
     } catch (e) {
-      json(res, 500, { error: String((e && e.message) || e) });
+      json(res, (e && e.status) || 500, { error: String((e && e.message) || e) });
     }
   });
 
   server.submitted = submitted;
+  server.talk = talk;
   return server;
+}
+
+function httpError(status, message) {
+  return Object.assign(new Error(message), { status });
 }
 
 module.exports = { createServer, ROUTES };

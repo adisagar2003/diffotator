@@ -60,7 +60,7 @@ const OUT = path.join(ROOT, "site", "demo");
   // and the stand-in server loaded before anything asks it for data.
   fs.rmSync(OUT, { recursive: true, force: true });
   fs.mkdirSync(path.join(OUT, "vendor"), { recursive: true });
-  for (const f of ["app.js", "walk.js", "style.css", "highlight.js", "keys.js", "review-model.js"]) fs.copyFileSync(path.join(ROOT, "web", f), path.join(OUT, f));
+  for (const f of ["app.js", "walk.js", "ask.js", "style.css", "highlight.js", "keys.js", "review-model.js"]) fs.copyFileSync(path.join(ROOT, "web", f), path.join(OUT, f));
   for (const f of ["canvas.js", "canvas.css"]) fs.copyFileSync(path.join(ROOT, "web", "vendor", f), path.join(OUT, "vendor", f));
   for (const f of ["scope.js", "walkthrough.js"]) fs.copyFileSync(path.join(ROOT, "src", f), path.join(OUT, f));
   // feedback.js is CommonJS; the stand-in renders "what Claude reads" with it.

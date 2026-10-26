@@ -123,6 +123,19 @@
     });
 
     const mr = isObj(raw.mr) && str(raw.mr.url) ? { iid: str(raw.mr.iid), url: str(raw.mr.url) } : null;
+    // How sure the agent is that this is safe to merge. A reason not marked ok
+    // reads as a concern: better to flag what is fine than to reassure wrongly.
+    const conf = isObj(raw.confidence) ? raw.confidence : {};
+    const level = str(conf.level).toLowerCase();
+    const confidence = ["high", "medium", "low"].includes(level)
+      ? {
+          level,
+          summary: str(conf.summary),
+          reasons: (Array.isArray(conf.reasons) ? conf.reasons : [])
+            .filter((r) => isObj(r) && str(r.text))
+            .map((r) => ({ ok: r.ok === true, text: str(r.text) })),
+        }
+      : null;
     return {
       title: str(raw.title),
       ticket: str(raw.ticket),
@@ -138,6 +151,7 @@
       edges,
       links,
       mr,
+      confidence,
       fallback: false,
       error,
     };
@@ -146,7 +160,7 @@
   function fallbackWalkthrough(paths, error) {
     return {
       title: "", ticket: "", summary: "", changes: [], decisions: [], lookHard: "", domain: [], terms: [],
-      blocks: fallback(paths), edges: [], links: [], mr: null, fallback: true, error,
+      blocks: fallback(paths), edges: [], links: [], mr: null, confidence: null, fallback: true, error,
     };
   }
 

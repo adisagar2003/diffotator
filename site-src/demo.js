@@ -32,6 +32,12 @@
   const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
   const empty = { files: [], diffs: {}, full: {}, tree: [], walkthrough: null };
   let lastMarkdown = "";
+  // Ask your agent, played back: each question gets a canned answer a moment later.
+  const thread = [];
+  const CANNED = {
+    why: "One gap keeps it at **Medium**: a code's end date is checked when it is added to the cart, but not again at checkout. A code added just before midnight still works after it expires.\n\nTo make it **High**: check the date again in `server/routes/cart.js` before charging, and add one test for it.",
+    any: "This is the demo, so this answer is pre-written. In a real review your agent reads your question and the code, and answers here while the review stays open.",
+  };
 
   window.fetch = async (input, init = {}) => {
     const url = new URL(typeof input === "string" ? input : input.url, location.href);
@@ -70,6 +76,17 @@
         return reply(at.walkthrough || { blocks: [], edges: [], links: [], terms: [], changes: [], decisions: [], domain: [], fallback: true, error: null });
       case "preview":
         return reply({ markdown: window.Feedback.render({ ...body, repo: D.overview.name }) });
+      case "ask": {
+        const item = { id: thread.length + 1, text: body.text, context: body.context || null, askedAt: Date.now(), answer: null, answeredAt: null };
+        thread.push(item);
+        setTimeout(() => {
+          item.answer = /confidence/i.test(item.text) ? CANNED.why : CANNED.any;
+          item.answeredAt = Date.now();
+        }, 1800);
+        return reply({ id: item.id });
+      }
+      case "thread":
+        return reply({ items: thread.map((x) => ({ ...x })), listening: true });
       case "submit":
         lastMarkdown = window.Feedback.render({ ...body, repo: D.overview.name });
         return reply({ ok: true });

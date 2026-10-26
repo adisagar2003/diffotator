@@ -18,7 +18,7 @@
   /* The single-key shortcuts the handler owns. All of them get defaulted, not
      just the two that move focus into a text box, because "remember to
      preventDefault in this case" is the rule that already got forgotten once. */
-  const SHORTCUTS = "jknpsfvt?/cb[]w";
+  const SHORTCUTS = "jknpsfvt?/cb[]wa";
 
   /**
    * The shortcut a keystroke means, or null for one the page keeps.
@@ -33,7 +33,7 @@
      is not an overlay — it only holds focus — so anything drawn over it goes
      first. Adding a way in without adding an entry here is the bug this list
      exists to make obvious. */
-  const DISMISS_ORDER = ["popover", "searchBar", "modal", "helpSheet", "fileFilter"];
+  const DISMISS_ORDER = ["popover", "searchBar", "modal", "helpSheet", "askPanel", "fileFilter"];
 
   /** Which one to release, given what is open, or null if nothing is. */
   function dismissTarget(open) {

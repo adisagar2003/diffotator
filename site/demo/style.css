@@ -457,6 +457,58 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 .lbl-pill{display:inline-block;font-size:10px;padding:0 6px;border-radius:9px;background:var(--elev2);color:var(--text-dim);border:1px solid var(--border);margin-right:4px}
 .lbl-pill.blocking{background:#4a1f24;border-color:#7a2f38;color:#ffb3ba}
 
+/* ---------- merge confidence + ask your agent ---------- */
+.chip.conf{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:600}
+.chip.conf .dot{width:8px;height:8px;border-radius:50%;background:currentColor;flex:0 0 auto}
+.chip.conf .lbl{font-weight:400;color:var(--text-dim)}
+.conf-high{color:#5fe08a;border-color:#23663a;background:#12301d}
+.conf-medium{color:#ffc95c;border-color:#7a5a17;background:#33270d}
+.conf-low{color:#ff8a94;border-color:#7a2f38;background:#3a1519}
+#btnAsk .ico{color:#c08bff}
+#askBadge{background:#c08bff;color:#1b1c1e}
+#askPanel{
+  position:fixed;right:0;top:40px;bottom:0;width:min(400px,100vw);z-index:72;display:flex;flex-direction:column;
+  background:var(--panel);border-left:1px solid var(--border);box-shadow:-14px 0 40px #0009;
+  animation:askIn .2s cubic-bezier(.2,0,0,1)
+}
+@keyframes askIn{from{transform:translateX(24px);opacity:0}}
+.ask-head{display:flex;align-items:flex-start;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--border)}
+.ask-status{font-size:11.5px;color:var(--text-dim);margin-top:2px;display:flex;align-items:center;gap:6px}
+.ask-status::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--muted)}
+.ask-status.on::before{background:var(--ok);box-shadow:0 0 0 3px #3fb95033}
+.ask-status.busy::before{background:var(--warn)}
+.ask-scroll{flex:1;overflow:auto;padding:12px}
+.ask-conf{background:var(--elev);border:1px solid var(--border);border-radius:9px;padding:10px 12px;margin-bottom:14px;font-size:12.5px}
+.ask-conf .ac-head{display:flex;align-items:center;gap:8px}
+.ask-conf p{margin:8px 0 0;color:var(--text-dim)}
+.ask-conf ul{list-style:none;margin:8px 0;padding:0}
+.ask-conf li{display:flex;gap:8px;padding:3px 0}
+.ask-conf li span{flex:0 0 14px;font-weight:700;text-align:center}
+.ask-conf li.ok span{color:var(--ok)}
+.ask-conf li.warn span{color:var(--warn)}
+.ask-thread{display:flex;flex-direction:column;gap:8px}
+.ask-q,.ask-a{max-width:92%;padding:8px 11px;border-radius:11px;font-size:12.5px;line-height:1.5;overflow-wrap:anywhere}
+.ask-q{align-self:flex-end;background:var(--accent-dim);border:1px solid #3f79d8;white-space:pre-wrap;border-bottom-right-radius:3px}
+.ask-where{font:11px var(--mono);color:#9fd0ff;margin-bottom:3px}
+.ask-a{align-self:flex-start;background:var(--elev);border:1px solid var(--border);border-bottom-left-radius:3px}
+.ask-a p{margin:0 0 6px}.ask-a p:last-child{margin:0}
+.ask-a code{font:11.5px var(--mono);background:var(--bg);padding:0 4px;border-radius:3px}
+.ask-a pre{font:11.5px/1.5 var(--mono);background:var(--bg);padding:6px 8px;border-radius:5px;overflow:auto;margin:4px 0 6px}
+.ask-a.wait{color:var(--text-dim);font-style:italic}
+.dots::after{content:"";animation:dots 1.2s steps(4) infinite}
+@keyframes dots{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
+.ask-empty{color:var(--muted);font-size:12.5px;text-align:center;margin:30px 10px}
+.ask-compose{border-top:1px solid var(--border);padding:10px 12px}
+.ask-ctx{display:flex;align-items:center;gap:4px;margin-bottom:6px}
+.ask-ctx:empty{display:none}
+.ask-ctx .chip{max-width:none;direction:rtl;text-align:left}
+#askBody{width:100%;background:var(--bg);border:1px solid var(--accent-dim);border-radius:7px;color:var(--text);padding:8px 10px;font:12.5px/1.5 var(--ui);resize:none;outline:none}
+#askBody:focus{border-color:var(--accent)}
+.ask-err{color:var(--danger);font-size:11.5px;margin-top:5px}
+.ask-foot{display:flex;align-items:center;justify-content:space-between;margin-top:7px}
+.ask-foot .hint{font-size:11px;color:var(--muted)}
+@media (prefers-reduced-motion:reduce){#askPanel,.dots::after{animation:none}}
+
 /* ---------- popover ---------- */
 .popover{
   position:fixed;width:min(430px,calc(100vw - 16px));background:var(--elev);border:1px solid var(--border);border-radius:9px;
@@ -642,7 +694,8 @@ body.mode-walk.wk-noleft #leftPane,body.mode-walk.wk-noleft .vsplit[data-target=
   .tb-right{margin-left:auto}
   .tb-right{gap:4px}
   .tb-right .btn{padding:5px 9px}
-  #btnComments .lbl{display:none}
+  #btnComments .lbl,#btnAsk .lbl,.chip.conf .lbl{display:none}
+  #askPanel{top:0;width:100vw;border-left:0}
   .wk-mobile-only{display:inline-flex}
   #walkBar{flex-wrap:wrap;row-gap:2px;padding:4px 8px}
   #walkCrumbs{order:3;flex:1 0 100%;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}

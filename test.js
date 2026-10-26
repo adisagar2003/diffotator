@@ -12,6 +12,31 @@ const RM = require("./web/review-model");
 const { render } = require("./src/feedback");
 const W = require("./src/walkthrough");
 const P = require("./src/platform");
+const T = require("./src/talk");
+
+// --- talk: questions mid-review ---------------------------------------------
+{
+  const t = T.createTalk();
+  const first = t.next(1000);
+  assert.strictEqual(t.thread().listening, true, "the page can tell an agent is listening");
+  t.ask("one?", null);
+  t.ask("two?", { file: "a.ts", side: "new", line: 3, text: "x" });
+  first.then((ev) => {
+    assert.strictEqual(ev.type, "question");
+    assert.strictEqual(ev.text, "one?", "a waiting agent gets the first question");
+  });
+  t.next(1000).then((ev) => assert.strictEqual(ev.text, "two?", "the second waits its turn"));
+  assert.strictEqual(t.answer(null, "a1").id, 1, "no id answers the oldest open question");
+  assert.strictEqual(t.answer(null, "a2").id, 2);
+  assert.strictEqual(t.answer(null, "a3"), null, "nothing open, nothing answered");
+  assert.strictEqual(t.answer(9, "x"), null);
+  t.finish("approved", "The user approved.");
+  t.next(1000).then((ev) => assert.deepStrictEqual(ev, { type: "done", decision: "approved", output: "The user approved." }));
+  t.next(5).then((ev) => assert.deepStrictEqual(ev, { type: "none" }, "an empty queue times out quietly"));
+  const msg = T.formatEvent({ type: "question", id: 2, text: "two?\nreally?", context: { file: "a.ts", line: 3, text: "x" } });
+  assert.ok(msg.includes("> two?\n> really?") && msg.includes("About `a.ts`:3"), "the agent sees the question and where");
+  assert.strictEqual(T.formatEvent({ type: "done", output: "" }), "Review session closed without feedback.");
+}
 
 // --- feedback rendering ----------------------------------------------------
 assert.strictEqual(render({ decision: "approved", annotations: [] }), "The user approved.");
@@ -113,6 +138,15 @@ assert.ok(
   assert.strictEqual(wt.title, "T", "strings are trimmed");
   assert.deepStrictEqual(wt.changes, [{ label: "When", text: "now" }, { label: "Locks", text: "row" }], "pairs or objects; empty label dropped");
   assert.deepStrictEqual(wt.decisions, ["flat fee waits"], "non-strings dropped");
+  assert.strictEqual(wt.confidence, null, "no confidence written, no chip");
+  const conf = (c) => W.validate({ confidence: c, blocks: [] }, paths).confidence;
+  assert.deepStrictEqual(
+    conf({ level: " High ", summary: "small", reasons: [{ ok: true, text: "tested" }, { text: "no rollback" }, "bare", { ok: true }] }),
+    { level: "high", summary: "small", reasons: [{ ok: true, text: "tested" }, { ok: false, text: "no rollback" }] },
+    "level is normalised; a reason not marked ok is a concern; reasons without text are dropped"
+  );
+  assert.strictEqual(conf({ level: "certain" }), null, "only high, medium or low");
+  assert.strictEqual(conf("high"), null);
   assert.deepStrictEqual(wt.mr, { iid: "7417", url: "https://gitlab.com/x/-/merge_requests/7417" });
   assert.deepStrictEqual(wt.terms, [{ term: "Rule cost", meaning: "m", source: "a/CONTEXT.md" }]);
   assert.deepStrictEqual(
@@ -959,8 +993,8 @@ assert.ok(
   // defaulted, so every other shortcut was one focus call away from the same
   // bug. The handler owns them all now.
   for (const k of K.SHORTCUTS) assert.strictEqual(K.shortcut({ key: k }), k, `${k} is a shortcut`);
-  for (const k of "c/") assert.ok(K.SHORTCUTS.includes(k), `${k} focuses a text box, so it must be owned`);
-  assert.strictEqual(K.shortcut({ key: "a" }), null, "an unbound key is left to the page");
+  for (const k of "c/a") assert.ok(K.SHORTCUTS.includes(k), `${k} focuses a text box, so it must be owned`);
+  assert.strictEqual(K.shortcut({ key: "x" }), null, "an unbound key is left to the page");
   assert.strictEqual(K.shortcut({ key: "ArrowDown" }), null, "arrows are handled before the switch");
   assert.strictEqual(K.shortcut({ key: "" }), null, "no key is not a shortcut");
   assert.strictEqual(K.shortcut({ key: "?" }), "?", "shift is not a modifier here — ? is shift+/");
@@ -984,7 +1018,7 @@ assert.ok(
 
   // Escape has to release everything that can hold focus. It released four
   // things and not the file filter, which `/` is the documented way into.
-  const shut = { popover: false, searchBar: false, modal: false, helpSheet: false, fileFilter: false };
+  const shut = { popover: false, searchBar: false, modal: false, helpSheet: false, askPanel: false, fileFilter: false };
   assert.strictEqual(K.dismissTarget(shut), null, "nothing open, nothing to dismiss");
   for (const id of K.DISMISS_ORDER) {
     assert.strictEqual(K.dismissTarget({ ...shut, [id]: true }), id, `Escape releases ${id}`);
@@ -1007,7 +1041,7 @@ assert.ok(
   const closers = [...app.matchAll(/function (close\w+)\(\) \{[\s\S]*?\n\}/g)];
   assert.deepStrictEqual(
     closers.map((m) => m[1]).sort(),
-    ["closeHelp", "closeModal", "closePopover", "closeSearch"],
+    ["closeAsk", "closeHelp", "closeModal", "closePopover", "closeSearch"],
     "one named close per dismissal, so there is one place to get this right"
   );
   /* …and hands it back to the pane it read *first*. Hiding a focused element
@@ -1022,10 +1056,17 @@ assert.ok(
     "no dismissal hides an overlay out from under the reader's focus"
   );
 
+  // The map swallows the diff's shortcuts; asking your agent is not one of them.
+  assert.match(fs.readFileSync(path.join(__dirname, "web", "walk.js"), "utf8"), /const MAP_KEEPS = "[^"]*a[^"]*";/, "a opens Ask on the map too");
+
   // And the page has to load the policy, or every keystroke throws.
   const html = fs.readFileSync(path.join(__dirname, "web", "index.html"), "utf8");
   assert.match(html, /<script src="\/keys\.js"><\/script>/, "index.html loads keys.js");
   assert.ok(html.indexOf("/keys.js") < html.indexOf("/app.js"), "…before app.js reads window.Keys");
+  assert.ok(html.indexOf("/ask.js") > 0 && html.indexOf("/ask.js") < html.indexOf("/app.js"), "index.html loads ask.js before app.js boots it");
+  for (const [, id] of fs.readFileSync(path.join(__dirname, "web", "ask.js"), "utf8").matchAll(/\$\("#(\w+)"\)/g)) {
+    assert.ok(html.includes(`id="${id}"`), `ask.js's #${id} exists on the page`);
+  }
 }
 
 // --- drafts: selection and collapse survive a restart -----------------------
@@ -1131,6 +1172,7 @@ fs.writeFileSync(path.join(dir, "new.txt"), "hello\n");
   await scopeKinds();
   await brokenAndEmptyRepos();
   await httpSurface();
+  await sessionLifecycle();
   console.log("ok — all checks passed");
 })().catch((e) => {
   console.error(e);
@@ -1494,6 +1536,27 @@ async function draftsAndHook() {
   assert.strictEqual((await at({}, { minFiles: 3, enabled: false })).verdict, "allow", "kill switch");
   assert.strictEqual((await H.decide({ cwd: os.tmpdir() }, { minFiles: 1 })).why, "not-a-repo");
 
+  /* A question asked mid-review ends the agent's turn with the question (the
+     review stays open); the finished review ends it with the feedback. */
+  {
+    const cwd = process.cwd();
+    const tty = process.stdin.isTTY;
+    process.chdir(d);
+    process.stdin.isTTY = true;
+    try {
+      const q = await H.run({ openReview: async () => ({ type: "question", id: 4, text: "why?", context: null }) });
+      assert.strictEqual(q.decision, "block");
+      assert.ok(q.reason.includes("> why?") && q.reason.includes("--id 4"), "the question reaches the agent");
+      assert.strictEqual(D.loadHookState(root).decision, "asked");
+      put("a.ts", "const a = 4;\n");
+      const fb = await H.run({ openReview: async () => ({ type: "done", decision: "annotated", output: "fix a" }) });
+      assert.deepStrictEqual(fb, { decision: "block", reason: "fix a" });
+    } finally {
+      process.stdin.isTTY = tty;
+      process.chdir(cwd);
+    }
+  }
+
   // --- harness contract ----------------------------------------------------
   assert.deepStrictEqual(H.stopOutput(null), {}, "allowing a stop emits no decision");
   assert.deepStrictEqual(
@@ -1665,7 +1728,7 @@ async function httpSurface() {
   const { createServer, ROUTES } = require("./src/server");
 
   for (const key of Object.keys(ROUTES)) {
-    assert.match(key, /^(GET|POST) \/api\/[a-z]+$/, `route key is "METHOD /path": ${key}`);
+    assert.match(key, /^(GET|POST) \/api\/[a-z]+(\/[a-z]+)?$/, `route key is "METHOD /path": ${key}`);
   }
 
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-http-repo-"));
@@ -1679,7 +1742,8 @@ async function httpSurface() {
   fs.writeFileSync(path.join(d, "a.ts"), "const a = 2;\n");
 
   const root = await G.repoRoot(d);
-  const server = createServer({ root, title: "session title" });
+  let agentDone = 0;
+  const server = createServer({ root, title: "session title", token: "s3cret", onAgentDone: () => agentDone++ });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const json = async (p, opts) => (await fetch(base + p, opts)).json();
@@ -1776,7 +1840,7 @@ async function httpSurface() {
   const post = (path, payload) =>
     json(path, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-diffotator": "1" },
       body: JSON.stringify(payload),
     });
   const review = {
@@ -1798,11 +1862,50 @@ async function httpSurface() {
   );
   assert.strictEqual(await status("/api/preview"), 404, "…and it is a POST, like every other mutation-shaped route");
 
+  /* Who may call what. Another website can post to localhost but cannot add a
+     custom header without the server's say-so, and cannot read the agent's secret. */
+  const raw = (p, headers = {}, payload) =>
+    fetch(base + p, payload === undefined ? { headers } : { method: "POST", headers, body: JSON.stringify(payload) });
+  assert.strictEqual((await raw("/api/preview", {}, review)).status, 403, "a POST without the page's header is refused");
+  assert.strictEqual((await raw("/api/agent/ping")).status, 403, "the agent's routes need the secret");
+  assert.strictEqual((await raw("/api/agent/ping", { "x-diffotator-token": "guess" })).status, 403);
+  // fetch will not forge Host, so ask the way a rebound page would arrive.
+  const rebound = await new Promise((r) =>
+    require("http").get({ host: "127.0.0.1", port: server.address().port, path: "/api/overview", headers: { host: "evil.example" } }, (res) => {
+      res.resume();
+      r(res.statusCode);
+    })
+  );
+  assert.strictEqual(rebound, 403, "a rebound host name is refused");
+  const agent = { "x-diffotator-token": "s3cret", "content-type": "application/json" };
+  assert.strictEqual((await raw("/api/agent/ping", agent)).status, 200);
+
+  /* Asking mid-review: the page asks, the agent hears it, answers, and the
+     page sees the answer — all while the review stays open. */
+  assert.strictEqual((await raw("/api/ask", { "x-diffotator": "1" }, { text: "  " })).status, 400, "an empty question is refused");
+  const asked = await post("/api/ask", { text: "Why 2?", context: { file: "a.ts", side: "new", line: 1, text: "const a = 2;" } });
+  assert.strictEqual(asked.id, 1);
+  const heard = await (await raw("/api/agent/next?timeout=2000", agent)).json();
+  assert.strictEqual(heard.type, "question");
+  assert.strictEqual(heard.text, "Why 2?");
+  assert.deepStrictEqual(heard.context, { file: "a.ts", side: "new", line: 1, text: "const a = 2;" });
+  assert.ok(T.formatEvent(heard).includes("diffotator answer --id 1"), "the agent is told how to reply");
+  assert.strictEqual((await json("/api/thread")).items[0].answer, null);
+  assert.strictEqual((await raw("/api/agent/answer", agent, { id: 1, text: "It was 1." })).status, 200);
+  assert.strictEqual((await json("/api/thread")).items[0].answer, "It was 1.", "the page sees the answer");
+  assert.strictEqual(
+    (await raw("/api/agent/answer", agent, { text: "nobody asked" })).status,
+    404,
+    "no open question, nothing to answer"
+  );
+  assert.deepStrictEqual(await (await raw("/api/agent/next?timeout=50", agent)).json(), { type: "none" }, "a quiet wait renews");
+  assert.strictEqual(agentDone, 0, "questions do not end the review");
+
   // Submitting resolves the session promise; the server never touches teardown.
   assert.deepStrictEqual(
     await json("/api/submit", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-diffotator": "1" },
       body: JSON.stringify({
         decision: "annotated",
         summary: "looks close",
@@ -1817,8 +1920,82 @@ async function httpSurface() {
   assert.ok(result.output.includes("looks close"), "the summary is rendered for the agent");
   assert.ok(result.output.includes("1 blocking comment"));
   assert.ok(result.output.includes("working tree vs HEAD"), "one scope label, shared with the page");
+  const last = await (await raw("/api/agent/next?timeout=2000", agent)).json();
+  assert.strictEqual(last.type, "done", "the agent's next wait hands over the finished review");
+  assert.strictEqual(last.output, result.output);
+  assert.strictEqual(agentDone, 1, "…and the review process may now leave");
 
   await new Promise((r) => server.close(r));
+  fs.rmSync(d, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+  delete process.env.DIFFOTATOR_DATA_DIR;
+}
+
+/* The review outlives the command that opened it: the agent's command ends on
+   a question, the page stays up, `answer` reaches the same review, and the
+   process leaves once the finished review has been collected. Real processes,
+   because detaching and the session file are exactly what could go wrong. */
+async function sessionLifecycle() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-session-"));
+  process.env.DIFFOTATOR_DATA_DIR = home; // inherited by the review process
+  delete require.cache[require.resolve("./src/drafts")];
+  delete require.cache[require.resolve("./src/session")];
+  const Session = require("./src/session");
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "diffotator-session-repo-"));
+  const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "pipe" });
+  g("init", "-q", "-b", "main");
+  g("config", "user.email", "t@t.t");
+  g("config", "user.name", "T");
+  fs.writeFileSync(path.join(d, "a.ts"), "1\n");
+  g("add", "-A");
+  g("commit", "-qm", "init");
+  const root = await G.repoRoot(d);
+  const page = (s, p, payload) =>
+    fetch(Session.urlOf(s) + p, payload && { method: "POST", headers: { "content-type": "application/json", "x-diffotator": "1" }, body: JSON.stringify(payload) }).then((r) => r.json());
+  const gone = async (pid) => {
+    for (let i = 0; i < 50; i++) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        return true;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
+  };
+
+  const s = await Session.ensure(root, {});
+  try {
+    assert.strictEqual(s.reused, false);
+    assert.strictEqual((fs.statSync(path.join(home, "sessions", fs.readdirSync(path.join(home, "sessions"))[0])).mode & 0o777).toString(8), "600", "only you can read the secret");
+    assert.strictEqual((await Session.ensure(root, {})).pid, s.pid, "asking for nothing rejoins the open review");
+
+    await page(s, "/api/ask", { text: "why?" });
+    const q = await Session.waitNext(s);
+    assert.strictEqual(q.type, "question");
+    await Session.answer(s, q.id, "because");
+    assert.strictEqual((await page(s, "/api/thread")).items[0].answer, "because");
+    await assert.rejects(Session.answer(s, null, "again"), /no open question/, "an answer with no question is refused");
+
+    // A different walkthrough is a different review: the old one is replaced.
+    const wt = path.join(home, "wt.json");
+    fs.writeFileSync(wt, "{}");
+    const s2 = await Session.ensure(root, { walkthrough: wt });
+    assert.notStrictEqual(s2.pid, s.pid);
+    assert.ok(await gone(s.pid), "the replaced review's process leaves");
+    assert.strictEqual((await Session.alive(root)).pid, s2.pid);
+
+    await page(s2, "/api/submit", { decision: "approved", annotations: [] });
+    // Sent but not yet collected: a new review must not rejoin it and read its feedback.
+    const s3 = await Session.ensure(root, { walkthrough: wt });
+    assert.notStrictEqual(s3.pid, s2.pid, "a sent review is never handed to a new one");
+    await page(s3, "/api/submit", { decision: "approved", annotations: [] });
+    assert.deepStrictEqual(await Session.waitNext(s3), { type: "done", decision: "approved", output: "The user approved." });
+    assert.ok(await gone(s3.pid), "collected: the review process leaves");
+    assert.strictEqual(Session.read(root), null, "…and takes its session file with it");
+  } finally {
+    for (const x of [Session.read(root)]) if (x) try { process.kill(x.pid); } catch {}
+  }
   fs.rmSync(d, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
   delete process.env.DIFFOTATOR_DATA_DIR;

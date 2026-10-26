@@ -72,6 +72,7 @@
     }
     if (seq !== W.loadSeq) return false;
     W.wt = wt;
+    if (window.Ask) Ask.confidence(wt.confidence);
     W.idx = WT.index(wt.blocks);
     W.order = WT.fileOrder(wt.blocks);
     return true;
@@ -432,7 +433,7 @@
 
   // The app's single-key shortcuts act on the hidden stream; on the map they would
   // mark or fold a file nobody can see, so the map keeps only these.
-  const MAP_KEEPS = "?bt";
+  const MAP_KEEPS = "?bta";
 
   /** The walkthrough's turn at a keystroke, after app.js's typing guard. True if taken. */
   function key(e) {

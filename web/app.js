@@ -2200,7 +2200,7 @@ const Prefs = {
       this.pending = {};
       fetch("/api/prefs", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-diffotator": "1" },
         body: JSON.stringify(patch),
       }).catch(() => {}); // lost prefs must never take the review down
     }, 250);
@@ -2228,7 +2228,7 @@ function saveDraft() {
   draftTimer = setTimeout(() => {
     fetch("/api/draft", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-diffotator": "1" },
       body: JSON.stringify({
         ann: S.ann,
         viewed: [...S.viewed],
@@ -2334,6 +2334,15 @@ function closePopover() {
   restoreFocus(pane);
 }
 $("#popClose").onclick = closePopover;
+// Ask the agent about this line now, instead of saving a comment for the end.
+$("#popAsk").onclick = () => {
+  const f = S.popFor;
+  const text = $("#popBody").value.trim();
+  if (!text) return $("#popBody").focus();
+  const context = { file: f.file, side: f.side === "old" ? "old" : "new", line: f.side === "file" ? null : f.line, text: $("#popCode").textContent };
+  closePopover();
+  Ask.ask(text, context);
+};
 $("#popLabels").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-l]");
   if (!b) return;
@@ -2566,7 +2575,7 @@ $("#modalCopy").onclick = async (e) => {
   try {
     const r = await fetch("/api/preview", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-diffotator": "1" },
       body: JSON.stringify({
         decision: pendingDecision,
         summary: $("#modalSummary").value,
@@ -2612,7 +2621,7 @@ async function submit(decision) {
   $("#modal").hidden = true;
   await fetch("/api/submit", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-diffotator": "1" },
     body: JSON.stringify({
       decision,
       summary: $("#modalSummary").value,
@@ -2634,6 +2643,12 @@ function closeHelp() {
   restoreFocus(pane);
 }
 $("#btnHelp").onclick = () => ($("#helpSheet").hidden = false);
+
+function closeAsk() {
+  const pane = curPane();
+  $("#askPanel").hidden = true;
+  restoreFocus(pane);
+}
 $("#helpClose").onclick = closeHelp;
 
 // ---------------------------------------------------------------------------
@@ -2735,6 +2750,7 @@ const DISMISS = {
   searchBar: closeSearch,
   modal: closeModal,
   helpSheet: closeHelp,
+  askPanel: closeAsk,
   fileFilter: restoreFocus,
 };
 function dismiss() {
@@ -2743,6 +2759,7 @@ function dismiss() {
     searchBar: !$("#searchBar").hidden,
     modal: !$("#modal").hidden,
     helpSheet: !$("#helpSheet").hidden,
+    askPanel: !$("#askPanel").hidden,
     fileFilter: document.activeElement === $("#fileFilter"),
   });
   if (id) DISMISS[id]();
@@ -2844,6 +2861,9 @@ document.addEventListener("keydown", (e) => {
     case "b":
       toggleSidebar();
       break;
+    case "a":
+      Ask.toggle();
+      break;
   }
 });
 
@@ -2871,5 +2891,6 @@ document.addEventListener("keydown", (e) => {
       await setScope({ type: "range", base: S.ov.base.ref, head: "HEAD" }, "Branch");
     }
   }
+  Ask.init();
   if (window.Walk) await Walk.init();
 })();

@@ -20,10 +20,14 @@
     <span id="repoName" class="repo"></span>
     <span id="branchChip" class="chip branch"></span>
     <span id="scopeChip" class="chip scope"></span>
+    <button id="confChip" class="chip conf" title="How sure your agent is that this is safe to merge" hidden></button>
     <div id="progress" class="progress"></div>
   </div>
   <div class="tb-right">
     <button id="btnClassic" class="btn ghost" title="Today's full diff view (⇧C)">Classic</button>
+    <button id="btnAsk" class="btn ghost" title="Ask your agent a question (a)">
+      <span class="ico">✦</span> <span class="lbl">Ask agent</span> <span id="askBadge" class="count" hidden></span>
+    </button>
     <button id="btnComments" class="btn ghost" title="Toggle comments panel (t)">
       <span class="ico">🗨</span> <span class="lbl">Comments</span> <span id="cmtCount" class="count">0</span>
     </button>
@@ -124,6 +128,24 @@
   </aside>
 </div>
 
+<!-- ask your agent: questions answered while the review stays open -->
+<aside id="askPanel" hidden>
+  <div class="ask-head">
+    <div><b>Ask your agent</b><div id="askStatus" class="ask-status"></div></div>
+    <button id="askClose" class="x" title="Close (Esc)">✕</button>
+  </div>
+  <div class="ask-scroll">
+    <div id="askConf" class="ask-conf" hidden></div>
+    <div id="askThread" class="ask-thread"></div>
+  </div>
+  <div class="ask-compose">
+    <div id="askCtx" class="ask-ctx"></div>
+    <textarea id="askBody" placeholder="Ask about this change…" rows="3"></textarea>
+    <div id="askErr" class="ask-err" hidden></div>
+    <div class="ask-foot"><span class="hint">⏎ send · ⇧⏎ new line</span><button id="askSend" class="btn primary">Ask</button></div>
+  </div>
+</aside>
+
 <!-- annotation popover -->
 <div id="popover" class="popover" hidden>
   <div class="pop-head">
@@ -139,6 +161,7 @@
   <div class="pop-foot">
     <button id="popDelete" class="btn ghost danger" hidden>Delete</button>
     <div class="grow"></div>
+    <button id="popAsk" class="btn ghost" title="Send this to your agent as a question now, instead of with the review">Ask agent now</button>
     <button id="popSave" class="btn primary">Save <kbd>⌘⏎</kbd></button>
   </div>
 </div>
@@ -208,6 +231,7 @@
       <tr><td><kbd>w</kbd></td><td>ignore whitespace-only changes</td></tr>
       <tr><td><kbd>v</kbd></td><td>mark viewed &amp; go to next unviewed</td></tr>
       <tr><td><kbd>t</kbd></td><td>toggle comments panel</td></tr>
+      <tr><td><kbd>a</kbd></td><td>ask your agent a question</td></tr>
       <tr><td><kbd>b</kbd></td><td>toggle sidebar</td></tr>
       <tr><td><kbd>/</kbd></td><td>filter files — a path substring, or <code>unviewed</code>, <code>commented</code>, <code>added</code>, <code>deleted</code>, <code>modified</code>, <code>renamed</code>, <code>untracked</code>, <code>binary</code>, <code>hidden</code>; <code>!</code> negates</td></tr>
       <tr><td><kbd>⌘⏎</kbd></td><td>save comment / send feedback</td></tr>
@@ -225,6 +249,7 @@
 <script src="/walkthrough.js"></script>
 <script src="/vendor/canvas.js"></script>
 <script src="/walk.js"></script>
+<script src="/ask.js"></script>
 <script>if (!window.Walk) document.body.className = "mode-classic"; // the walkthrough failed to load: show the diff</script>
 <script src="/app.js"></script>
 </body>

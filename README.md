@@ -49,6 +49,22 @@ comments that are posted only when you say so.
 
 No walkthrough? diffotator still opens on the map, grouped by folder.
 
+## Ask your agent without leaving the page (new in 2.2)
+
+Press **Ask agent** (or `a`) and type a question. Your agent answers in the same
+panel a moment later, and the review stays open — no switching back to the
+terminal. Ask about a line by writing a comment and pressing **Ask agent now**.
+
+The **merge confidence** chip at the top (High · Medium · Low) is your agent's
+honest read of whether the change is safe to merge, with the reasons behind it.
+Click it, then **Ask why**.
+
+How it works: the review runs in a small background process. When you ask, the
+agent's `diffotator` command finishes with your question; the agent replies with
+`diffotator answer --id <n> "…"`, which also waits for your next message. Only
+the page can ask (it sends a header other websites can't), and only your agent
+can answer (it holds a secret key stored where only you can read it).
+
 ## What it is
 
 Browse commits, files and diffs like [Fork](https://git-fork.com), annotate any line,
@@ -115,14 +131,18 @@ diffotator --base origin/main --walkthrough walk.json   # open on an agent-writt
 `--base` pins the base ref used for branch-vs-base — it reaches git, not just the
 auto-detected default shown in the sidebar.
 
-From Claude Code: `/diffotator`. The CLI blocks until you submit; whatever it prints
-on stdout becomes the agent's next input.
+From your agent: `/diffotator`. The CLI blocks until you ask something or submit;
+whatever it prints on stdout becomes the agent's next input.
 
 | You do | Agent gets |
 |---|---|
+| **Ask agent** | `# Question from the reviewer` — it answers with `diffotator answer --id <n> "…"`, which waits for what you do next |
 | **Send feedback** | `# Code review feedback` — grouped by file, blocking comments called out |
 | **Approve** | `The user approved.` |
-| **Close** / `Ctrl-C` | `Review session closed without feedback.` |
+| **Close** | `Review session closed without feedback.` |
+
+`Ctrl-C` only stops listening: the review stays open in the browser, and
+`diffotator wait` listens again.
 
 <img src="site/shot-send.jpg" width="900" alt="The send dialog: an optional overall summary above the two comments about to be sent to the agent">
 
@@ -201,7 +221,7 @@ touched.
 ### Keys
 
 `j`/`k` file · `n`/`p` change · `↑`/`↓` line cursor · `c` comment · `v` viewed +
-next · `s` split/unified · `f` full file · `t` comments · `/` filter files ·
+next · `s` split/unified · `f` full file · `t` comments · `a` ask your agent · `/` filter files ·
 `⌘F` find in file · `⌘⏎` save/send · `Esc` close
 
 Walkthrough adds: `←↑→↓` move between boxes · `⏎` open · `1`–`9` open box N ·

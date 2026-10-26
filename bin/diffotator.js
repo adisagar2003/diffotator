@@ -8,6 +8,8 @@ const G = require("../src/git");
 const { createServer } = require("../src/server");
 const hook = require("../src/hook");
 const { browserCommand, setupAgent } = require("../src/platform");
+const Session = require("../src/session");
+const { formatEvent } = require("../src/talk");
 
 const HELP = `
 diffotator — Fork-style git review in the browser, annotations back to your agent.
@@ -16,6 +18,10 @@ Usage:
   diffotator [review] [options]      Open a review now
   diffotator setup                   Teach your agent the /diffotator command
                                      (run it again after every upgrade)
+  diffotator answer [--id <n>] <text>
+                                     Answer the reviewer's question (- reads stdin),
+                                     then wait for their next message
+  diffotator wait                    Wait for the reviewer's next message
   diffotator hook                    Stop-hook mode (reads hook JSON on stdin)
   diffotator hook --install          Add the Stop hook to ~/.claude/settings.json
   diffotator hook --uninstall        Remove it again
@@ -37,6 +43,7 @@ Stop hook:
   DIFFOTATOR_HOOK_MIN_FILES=3    Fewest changed files that will open a review
 
 Output (stdout, for agent consumption):
+  "# Question from the reviewer"  — they asked something; the review stays open
   annotations markdown  — the user left comments
   "The user approved."  — approved with no changes requested
   ""                    — session closed without feedback
@@ -47,7 +54,8 @@ function parseArgs(argv) {
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "review" || a === "diff") continue;
+    if (i === 0 && (a === "answer" || a === "wait" || a === "__serve")) o.cmd = a;
+    else if (a === "review" || a === "diff") continue;
     else if (a === "-h" || a === "--help") o.help = true;
     else if (a === "-C" || a === "--cwd") o.cwd = argv[++i];
     else if (a === "-b" || a === "--base") o.base = argv[++i];
@@ -62,9 +70,11 @@ function parseArgs(argv) {
       o.walkthrough = path.resolve(v);
     }
     else if (a === "--no-open") o.open = false;
+    else if (a === "--id") o.id = parseInt(argv[++i], 10) || null;
     else rest.push(a);
   }
-  if (rest[0] && !o.base) o.base = rest[0];
+  o.rest = rest;
+  if (!o.cmd && rest[0] && !o.base) o.base = rest[0];
   return o;
 }
 
@@ -83,34 +93,69 @@ function setup() {
   say("Then ask your agent: use diffotator to review <pull request link>");
 }
 
-// The browser needs a moment to paint its confirmation screen before the port
-// disappears from under it.
-const PAINT_MS = 400;
+/** What the agent reads on stdout: the reviewer's question, or the finished review. */
+function printEvent(ev) {
+  const out = formatEvent(ev);
+  if (out) process.stdout.write(out.endsWith("\n") ? out : out + "\n");
+}
+
+/* Ctrl-C stops listening, not the review: the page stays open in the browser. */
+function keepPageOnInterrupt() {
+  process.on("SIGINT", () => {
+    process.stderr.write("\nStopped listening. The review is still open in your browser; `diffotator wait` listens again.\n");
+    process.exit(130);
+  });
+}
+
+/** Open (or rejoin) the review for `root` and wait for the first thing the agent should hear. */
+async function review(root, opts) {
+  const s = await Session.ensure(root, opts);
+  const url = `http://localhost:${s.port}`;
+  process.stderr.write(`\n  diffotator  ${path.basename(root)}\n  ${url}${s.reused ? "  (already open)" : ""}\n\n`);
+  if (opts.open) openBrowser(url); // rejoined too: its tab may be long closed
+  keepPageOnInterrupt();
+  printEvent(await Session.waitNext(s));
+}
+
+/** `diffotator answer` / `diffotator wait`: talk to the review that is open for this repo. */
+async function converse(root, { id, text, waitOnly }) {
+  const s = await Session.alive(root);
+  if (!s) {
+    process.stderr.write(`diffotator: no review is open for ${root}\n`);
+    process.exit(1);
+  }
+  if (!waitOnly) {
+    if (!text) {
+      process.stderr.write('diffotator: say something — diffotator answer --id <n> "<your answer>" (or - to read stdin)\n');
+      process.exit(1);
+    }
+    await Session.answer(s, id, text);
+  }
+  keepPageOnInterrupt();
+  printEvent(await Session.waitNext(s));
+}
 
 /**
- * Run one review session to completion. Owns the port, the browser, the signals
- * and the teardown — the HTTP module only reports that a decision arrived.
- * @returns {Promise<{decision: string, output: string}>}
+ * The review itself, in its own background process (started by Session.ensure).
+ * It stays up while the reviewer and the agent talk, and leaves once the agent
+ * has been handed the finished review — or after a day with nobody listening.
  */
-function serveReview(root, { open = true, port = 0, title, base, walkthrough } = {}) {
-  const server = createServer({ root, title, base, walkthrough });
-  return new Promise((resolve) => {
-    const finish = (result) => {
-      setTimeout(() => server.close(() => resolve(result)), PAINT_MS);
-      // A socket that refuses to close must not hang the turn. A second resolve
-      // is a no-op, so this needs no guard flag.
-      setTimeout(() => resolve(result), PAINT_MS + 500).unref();
-    };
-    server.submitted.then(finish);
-    server.listen(port, "127.0.0.1", () => {
-      const url = `http://localhost:${server.address().port}`;
-      process.stderr.write(`\n  diffotator  ${path.basename(root)}\n  ${url}\n\n`);
-      if (open) openBrowser(url);
-    });
-    const bail = () =>
-      finish({ decision: "dismissed", output: "Review session closed without feedback." });
-    process.on("SIGINT", bail);
-    process.on("SIGTERM", bail);
+function serve(root, opts) {
+  const token = Session.newToken();
+  let leaving = false;
+  const leave = () => {
+    if (leaving) return;
+    leaving = true;
+    Session.remove(root);
+    setTimeout(() => process.exit(0), 800).unref(); // let the page paint its "sent" screen
+  };
+  const server = createServer({ root, title: opts.title, base: opts.base, walkthrough: opts.walkthrough, token, onAgentDone: leave });
+  // Sent but nobody came for it (the agent's command was stopped): don't linger.
+  server.submitted.then(() => setTimeout(leave, 10 * 60 * 1000).unref());
+  setTimeout(leave, 24 * 60 * 60 * 1000).unref();
+  process.on("SIGTERM", leave);
+  server.listen(opts.port || 0, "127.0.0.1", () => {
+    Session.write(root, { port: server.address().port, pid: process.pid, token, root, want: Session.wantOf(opts), startedAt: Date.now() });
   });
 }
 
@@ -153,7 +198,11 @@ async function main() {
     if (argv.includes("--uninstall")) return installHook(true);
     // Hook mode: stdout carries JSON for the harness and nothing else.
     const result = await hook.run({
-      openReview: (root) => serveReview(root, { open: true }),
+      openReview: async (root) => {
+        const s = await Session.ensure(root, {});
+        if (!s.reused) openBrowser(`http://localhost:${s.port}`);
+        return Session.waitNext(s);
+      },
     });
     process.stdout.write(JSON.stringify(result));
     return;
@@ -173,14 +222,17 @@ async function main() {
     process.exit(1);
   }
 
-  const { output } = await serveReview(root, {
-    open: opts.open,
-    port: opts.port || 0,
-    title: opts.title,
-    base: opts.base,
-    walkthrough: opts.walkthrough,
-  });
-  if (output) process.stdout.write(output.endsWith("\n") ? output : output + "\n");
+  if (opts.cmd === "__serve") return serve(root, opts);
+  if (opts.cmd === "answer" || opts.cmd === "wait") {
+    let text = opts.rest.join(" ").trim();
+    if (text === "-") text = await new Promise((r) => {
+      let raw = "";
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (c) => (raw += c));
+      process.stdin.on("end", () => r(raw.trim()));
+    });
+    await converse(root, { id: opts.id, text, waitOnly: opts.cmd === "wait" });
+  } else await review(root, opts);
   process.exit(0);
 }
 

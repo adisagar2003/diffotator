@@ -1,6 +1,6 @@
 {
   "name": "diffotator",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Review a big change as a walkthrough — a summary, the words you need, and a map of the change — then send your comments back to your coding agent.",
   "keywords": ["code-review", "diff", "git", "pull-request", "walkthrough", "coding-agent", "claude-code", "review-tool"],
   "homepage": "https://diffotator.vercel.app",
