@@ -1,5 +1,6 @@
 "use strict";
 const http = require("http");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
@@ -176,9 +177,12 @@ const ROUTES = {
 
   "GET /api/agent/ping": async ({ talk }) => ({ ok: true, finished: talk.finished() }),
 
-  "GET /api/agent/next": async ({ talk, q, agentDone }) => {
-    const ev = await talk.next(Math.min(+q.get("timeout") || 25000, 60000));
-    if (ev.type === "done") agentDone();
+  "GET /api/agent/next": async ({ root, talk, q, agentDone, hungUp, afterSent }) => {
+    const ev = await talk.next(Math.min(+q.get("timeout") || 25000, 60000), hungUp);
+    // The agent's command was stopped while it waited: keep its question for the next one.
+    if (hungUp.aborted) return talk.putBack(ev), ev;
+    // Only once the agent really has the review are the saved comments let go.
+    if (ev.type === "done") afterSent(() => (D.clearDraft(root), agentDone()));
     return ev;
   },
 
@@ -199,7 +203,6 @@ const ROUTES = {
     };
     submit(result);
     talk.finish(result.decision, result.output);
-    D.clearDraft(root);
     return { ok: true };
   },
 };
@@ -214,7 +217,7 @@ const ROUTES = {
  *   `{decision, output}` when the reviewer submits. The caller owns teardown
  *   and process exit — this module knows nothing about either.
  */
-function createServer({ root, title, base, walkthrough, token = null, onAgentDone = () => {} }) {
+function createServer({ root, title, base, walkthrough, token = null, pageKey = null, onAgentDone = () => {} }) {
   let onSubmit;
   const submitted = new Promise((resolve) => (onSubmit = resolve));
   const talk = createTalk();
@@ -223,22 +226,44 @@ function createServer({ root, title, base, walkthrough, token = null, onAgentDon
     const url = new URL(req.url, "http://localhost");
     const p = url.pathname;
     const q = url.searchParams;
+    // No other site may show this page inside its own (and trick a click on Approve).
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
     try {
       const route = ROUTES[`${req.method} ${p}`];
-      /* Who may call what. The agent's routes need the session's secret, which
-         only the agent's own commands can read. Everything else the page sends
-         must carry a custom header: a page on another site cannot add one
-         without the browser asking this server first, and it never says yes —
-         so no website can submit a review or put words in the agent's ear. */
-      // A page on another site that renamed itself to 127.0.0.1 (DNS rebinding)
-      // still sends its own name as Host, so only our own names get in.
-      if (!/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(req.headers.host || "")) {
-        throw httpError(403, "unknown host");
+      /* Who may call what.
+         - Host: a site that renamed itself to 127.0.0.1 (DNS rebinding) still
+           sends its own name, so only ours get in (plus DIFFOTATOR_ALLOWED_HOSTS,
+           for a forwarded port in a cloud editor).
+         - The agent's routes need the review's secret, which only the agent's
+           own commands can read.
+         - The page's routes need the key from the link diffotator printed (kept
+           in a cookie), so another user on this computer can't use them; and
+           every POST needs a custom header no other website can add. */
+      const host = (req.headers.host || "").replace(/:\d+$/, "");
+      if (!["localhost", "127.0.0.1", "[::1]", ...ALLOWED_HOSTS].includes(host)) {
+        throw httpError(403, `diffotator only answers to localhost, not "${host}" (add it to DIFFOTATOR_ALLOWED_HOSTS)`);
+      }
+      const cookie = `diffotator-${req.socket.localPort}`;
+      if (pageKey && req.method === "GET" && p === "/") {
+        if (same(q.get("k"), pageKey)) {
+          res.writeHead(302, { "Set-Cookie": `${cookie}=${pageKey}; HttpOnly; SameSite=Strict; Path=/`, Location: "/" });
+          return res.end();
+        }
+        if (!same(readCookie(req, cookie), pageKey)) {
+          res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+          return res.end(`<p style="font:16px system-ui;margin:40px">Open this review from the link diffotator printed in your terminal.</p>`);
+        }
       }
       if (p.startsWith("/api/agent/")) {
-        if (!token || req.headers["x-diffotator-token"] !== token) throw httpError(403, "not this review's agent");
-      } else if (req.method === "POST" && req.headers["x-diffotator"] !== "1") {
-        throw httpError(403, "requests must come from the diffotator page");
+        if (!same(req.headers["x-diffotator-token"], token)) throw httpError(403, "not this review's agent");
+      } else if (p.startsWith("/api/")) {
+        if (pageKey && !same(readCookie(req, cookie), pageKey)) {
+          throw httpError(403, "open this review from the link diffotator printed");
+        }
+        if (req.method === "POST" && req.headers["x-diffotator"] !== "1") {
+          throw httpError(403, "requests must come from the diffotator page");
+        }
       }
       if (route) {
         return json(
@@ -250,10 +275,12 @@ function createServer({ root, title, base, walkthrough, token = null, onAgentDon
             base,
             walkthrough,
             q,
-            body: () => readBody(req),
+            body: () => readBody(req).then((b) => (b && typeof b === "object" ? b : {})),
             submit: onSubmit,
             talk,
             agentDone: onAgentDone,
+            hungUp: hangup(res),
+            afterSent: (fn) => res.once("finish", fn),
             get scope() {
               return Scope.parse(q.get("scope"));
             },
@@ -270,6 +297,27 @@ function createServer({ root, title, base, walkthrough, token = null, onAgentDon
   server.submitted = submitted;
   server.talk = talk;
   return server;
+}
+
+const ALLOWED_HOSTS = (process.env.DIFFOTATOR_ALLOWED_HOSTS || "").split(",").map((h) => h.trim()).filter(Boolean);
+
+/** Constant-time compare of two secrets; false when either is missing. */
+function same(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const x = Buffer.from(a), y = Buffer.from(b);
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+function readCookie(req, name) {
+  const m = (req.headers.cookie || "").match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
+  return m ? m[1] : null;
+}
+
+/** Aborts when the client goes away before its answer was written. */
+function hangup(res) {
+  const ac = new AbortController();
+  res.on("close", () => !res.writableEnded && ac.abort());
+  return ac.signal;
 }
 
 function httpError(status, message) {

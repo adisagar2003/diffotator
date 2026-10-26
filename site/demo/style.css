@@ -512,7 +512,7 @@ kbd{font:11px var(--mono);background:var(--elev2);border:1px solid var(--border)
 /* ---------- popover ---------- */
 .popover{
   position:fixed;width:min(430px,calc(100vw - 16px));background:var(--elev);border:1px solid var(--border);border-radius:9px;
-  box-shadow:0 14px 44px #000a;z-index:60;padding:9px 11px 11px;font-family:var(--ui)
+  box-shadow:0 14px 44px #000a;z-index:75;padding:9px 11px 11px;font-family:var(--ui) /* above the ask panel */
 }
 .pop-head{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;font-weight:600;margin-bottom:6px}
 .x{border:0;background:transparent;cursor:pointer;color:var(--muted);font-size:13px}

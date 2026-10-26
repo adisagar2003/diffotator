@@ -94,6 +94,8 @@ Tell the user the URL it prints on stderr, then wait for stdout.
   `diffotator answer -C <dir> --id <n> - <<'EOF'` … `EOF`
   It shows them your answer, then waits for their next message — handle what it
   prints the same way. Don't edit code because of a question; just answer.
+- stderr says it is *handing over a review that was sent earlier* → act on that
+  feedback first, then run step 4 again for the new review.
 - `The user approved.` → done.
 - `Review session closed without feedback.` (or empty) → ask what they want.
 - A `# Code review feedback` document:

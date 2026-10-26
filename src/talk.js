@@ -15,8 +15,13 @@ function createTalk() {
   let nextId = 1;
   let finished = false;
 
+  /* The finished review is for everyone: every waiter gets it, and it stays
+     queued for anyone who comes later. A question goes to one waiter. */
   const deliver = () => {
-    while (queue.length && waiting.length) waiting.shift()(queue.shift());
+    while (queue.length && waiting.length) {
+      if (queue[0].type === "done") waiting.splice(0).forEach((w) => w(queue[0]));
+      else waiting.shift()(queue.shift());
+    }
   };
 
   return {
@@ -47,23 +52,31 @@ function createTalk() {
 
     /**
      * Resolve with the next event for the agent, or `{ type: "none" }` after
-     * `timeoutMs` so long-polls can be renewed. A question is handed out with
-     * its full text, read at delivery time.
+     * `timeoutMs` (or once `signal` aborts) so long-polls can be renewed. A
+     * question is handed out with its full text, read at delivery time.
      */
-    next(timeoutMs = 25000) {
+    next(timeoutMs = 25000, signal = null) {
       return new Promise((resolve) => {
         const done = (ev) => {
           clearTimeout(timer);
           resolve(ev.type === "question" ? { ...ev, ...items.find((x) => x.id === ev.id) } : ev);
         };
-        const timer = setTimeout(() => {
+        const quit = () => {
           const i = waiting.indexOf(done);
-          if (i >= 0) waiting.splice(i, 1);
-          resolve({ type: "none" });
-        }, timeoutMs);
+          if (i >= 0) waiting.splice(i, 1), resolve({ type: "none" });
+        };
+        const timer = setTimeout(quit, timeoutMs);
+        if (signal) signal.addEventListener("abort", quit);
         waiting.push(done);
         deliver();
       });
+    },
+
+    /** A question handed to an agent that hung up before reading it goes back to the front. */
+    putBack(ev) {
+      if (ev.type !== "question") return; // the finished review never left the queue
+      queue.unshift({ type: "question", id: ev.id });
+      deliver();
     },
 
     /** True once the review was sent: it can still be collected, but not reused. */

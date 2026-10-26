@@ -54,8 +54,7 @@ function parseArgs(argv) {
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (i === 0 && (a === "answer" || a === "wait" || a === "__serve")) o.cmd = a;
-    else if (a === "review" || a === "diff") continue;
+    if (a === "review" || a === "diff") continue;
     else if (a === "-h" || a === "--help") o.help = true;
     else if (a === "-C" || a === "--cwd") o.cwd = argv[++i];
     else if (a === "-b" || a === "--base") o.base = argv[++i];
@@ -71,6 +70,8 @@ function parseArgs(argv) {
     }
     else if (a === "--no-open") o.open = false;
     else if (a === "--id") o.id = parseInt(argv[++i], 10) || null;
+    // The first word that isn't a flag can be a command, wherever -C and friends went.
+    else if (!o.cmd && !rest.length && (a === "answer" || a === "wait" || a === "__serve")) o.cmd = a;
     else rest.push(a);
   }
   o.rest = rest;
@@ -110,7 +111,11 @@ function keepPageOnInterrupt() {
 /** Open (or rejoin) the review for `root` and wait for the first thing the agent should hear. */
 async function review(root, opts) {
   const s = await Session.ensure(root, opts);
-  const url = `http://localhost:${s.port}`;
+  if (s.finished) {
+    process.stderr.write("diffotator: handing over a review that was sent earlier. Run diffotator again to start a new one.\n");
+    return printEvent(await Session.waitNext(s));
+  }
+  const url = Session.pageUrl(s);
   process.stderr.write(`\n  diffotator  ${path.basename(root)}\n  ${url}${s.reused ? "  (already open)" : ""}\n\n`);
   if (opts.open) openBrowser(url); // rejoined too: its tab may be long closed
   keepPageOnInterrupt();
@@ -138,10 +143,12 @@ async function converse(root, { id, text, waitOnly }) {
 /**
  * The review itself, in its own background process (started by Session.ensure).
  * It stays up while the reviewer and the agent talk, and leaves once the agent
- * has been handed the finished review — or after a day with nobody listening.
+ * has been handed the finished review, when replaced, or after 12 hours with
+ * no requests at all.
  */
 function serve(root, opts) {
   const token = Session.newToken();
+  const pageKey = Session.newToken();
   let leaving = false;
   const leave = () => {
     if (leaving) return;
@@ -149,13 +156,22 @@ function serve(root, opts) {
     Session.remove(root);
     setTimeout(() => process.exit(0), 800).unref(); // let the page paint its "sent" screen
   };
-  const server = createServer({ root, title: opts.title, base: opts.base, walkthrough: opts.walkthrough, token, onAgentDone: leave });
-  // Sent but nobody came for it (the agent's command was stopped): don't linger.
-  server.submitted.then(() => setTimeout(leave, 10 * 60 * 1000).unref());
-  setTimeout(leave, 24 * 60 * 60 * 1000).unref();
+  const server = createServer({ root, title: opts.title, base: opts.base, walkthrough: opts.walkthrough, token, pageKey, onAgentDone: leave });
+  let idle;
+  const awake = () => {
+    clearTimeout(idle);
+    idle = setTimeout(leave, 12 * 60 * 60 * 1000).unref();
+  };
+  server.on("request", awake);
+  awake();
   process.on("SIGTERM", leave);
-  server.listen(opts.port || 0, "127.0.0.1", () => {
-    Session.write(root, { port: server.address().port, pid: process.pid, token, root, want: Session.wantOf(opts), startedAt: Date.now() });
+  server.on("error", (e) => {
+    Session.fail(root, e.message);
+    process.exit(1);
+  });
+  server.listen(opts.port || 0, "127.0.0.1", async () => {
+    const info = { port: server.address().port, pid: process.pid, token, pageKey, root, want: Session.wantOf(opts), startedAt: Date.now() };
+    if (!(await Session.claim(root, info))) process.exit(0); // another review for this repo won the race
   });
 }
 
@@ -200,7 +216,7 @@ async function main() {
     const result = await hook.run({
       openReview: async (root) => {
         const s = await Session.ensure(root, {});
-        if (!s.reused) openBrowser(`http://localhost:${s.port}`);
+        if (!s.reused) openBrowser(Session.pageUrl(s));
         return Session.waitNext(s);
       },
     });

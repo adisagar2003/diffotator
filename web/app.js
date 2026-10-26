@@ -2759,7 +2759,8 @@ function dismiss() {
     searchBar: !$("#searchBar").hidden,
     modal: !$("#modal").hidden,
     helpSheet: !$("#helpSheet").hidden,
-    askPanel: !$("#askPanel").hidden,
+    // A side panel, not an overlay: Escape closes it only from inside it.
+    askPanel: !$("#askPanel").hidden && $("#askPanel").contains(document.activeElement),
     fileFilter: document.activeElement === $("#fileFilter"),
   });
   if (id) DISMISS[id]();
@@ -2871,6 +2872,7 @@ document.addEventListener("keydown", (e) => {
 // boot
 // ---------------------------------------------------------------------------
 (async function boot() {
+  Ask.init(); // before anything that can fail, so the Ask button always works
   measureChar();
   const [ov] = await Promise.all([api("overview"), Prefs.load()]);
   S.ov = ov;
@@ -2891,6 +2893,5 @@ document.addEventListener("keydown", (e) => {
       await setScope({ type: "range", base: S.ov.base.ref, head: "HEAD" }, "Branch");
     }
   }
-  Ask.init();
   if (window.Walk) await Walk.init();
 })();

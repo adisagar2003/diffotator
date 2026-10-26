@@ -30,9 +30,30 @@ const T = require("./src/talk");
   assert.strictEqual(t.answer(null, "a2").id, 2);
   assert.strictEqual(t.answer(null, "a3"), null, "nothing open, nothing answered");
   assert.strictEqual(t.answer(9, "x"), null);
-  t.finish("approved", "The user approved.");
-  t.next(1000).then((ev) => assert.deepStrictEqual(ev, { type: "done", decision: "approved", output: "The user approved." }));
-  t.next(5).then((ev) => assert.deepStrictEqual(ev, { type: "none" }, "an empty queue times out quietly"));
+  const DONE = { type: "done", decision: "approved", output: "The user approved." };
+  const t2 = T.createTalk();
+  Promise.all([t2.next(1000), t2.next(1000)]).then((evs) =>
+    assert.deepStrictEqual(evs, [DONE, DONE], "every waiting agent gets the finished review, not just the first")
+  );
+  t2.finish("approved", "The user approved.");
+  t2.next(1000).then((ev) => assert.deepStrictEqual(ev, DONE, "…and so does one that comes later"));
+  assert.strictEqual(t2.finished(), true);
+  T.createTalk().next(5).then((ev) => assert.deepStrictEqual(ev, { type: "none" }, "an empty queue times out quietly"));
+
+  // An agent that hangs up stops listening, and a question it never read goes to the next one.
+  const t3 = T.createTalk();
+  const ac = new AbortController();
+  t3.next(1000, ac.signal).then((ev) => {
+    assert.deepStrictEqual(ev, { type: "none" });
+    assert.strictEqual(t3.thread().listening, false, "a hung-up agent is not listening");
+    t3.ask("still there?");
+    const lost = t3.next(1000);
+    lost.then((q) => {
+      t3.putBack(q); // its connection closed before the answer was written
+      return t3.next(1000);
+    }).then((again) => assert.strictEqual(again.text, "still there?", "the question is handed out again"));
+  });
+  ac.abort();
   const msg = T.formatEvent({ type: "question", id: 2, text: "two?\nreally?", context: { file: "a.ts", line: 3, text: "x" } });
   assert.ok(msg.includes("> two?\n> really?") && msg.includes("About `a.ts`:3"), "the agent sees the question and where");
   assert.strictEqual(T.formatEvent({ type: "done", output: "" }), "Review session closed without feedback.");
@@ -1901,6 +1922,21 @@ async function httpSurface() {
   assert.deepStrictEqual(await (await raw("/api/agent/next?timeout=50", agent)).json(), { type: "none" }, "a quiet wait renews");
   assert.strictEqual(agentDone, 0, "questions do not end the review");
 
+  // An agent whose command was stopped mid-wait stops counting as listening.
+  {
+    const ac = new AbortController();
+    const waiting = fetch(base + "/api/agent/next?timeout=5000", { headers: agent, signal: ac.signal }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 100));
+    assert.strictEqual((await json("/api/thread")).listening, true);
+    ac.abort();
+    await waiting;
+    await new Promise((r) => setTimeout(r, 100));
+    assert.strictEqual((await json("/api/thread")).listening, false, "…so the finished review below is not handed to nobody");
+  }
+  // The reviewer's comments stay saved until the agent has collected the review.
+  const DD = require("./src/drafts");
+  await post("/api/draft", { ann: [{ file: "a.ts", side: "new", line: 1, label: "issue", body: "keep me" }] });
+
   // Submitting resolves the session promise; the server never touches teardown.
   assert.deepStrictEqual(
     await json("/api/submit", {
@@ -1920,10 +1956,14 @@ async function httpSurface() {
   assert.ok(result.output.includes("looks close"), "the summary is rendered for the agent");
   assert.ok(result.output.includes("1 blocking comment"));
   assert.ok(result.output.includes("working tree vs HEAD"), "one scope label, shared with the page");
+  assert.ok(DD.loadDraft(root), "sent but not collected: the comments are still saved");
   const last = await (await raw("/api/agent/next?timeout=2000", agent)).json();
   assert.strictEqual(last.type, "done", "the agent's next wait hands over the finished review");
   assert.strictEqual(last.output, result.output);
+  await new Promise((r) => setTimeout(r, 50));
   assert.strictEqual(agentDone, 1, "…and the review process may now leave");
+  assert.strictEqual(DD.loadDraft(root), null, "collected: now the saved comments can go");
+  assert.strictEqual((await (await raw("/api/agent/next?timeout=2000", agent)).json()).type, "done", "a second agent hears it too");
 
   await new Promise((r) => server.close(r));
   fs.rmSync(d, { recursive: true, force: true });
@@ -1950,8 +1990,17 @@ async function sessionLifecycle() {
   g("add", "-A");
   g("commit", "-qm", "init");
   const root = await G.repoRoot(d);
-  const page = (s, p, payload) =>
-    fetch(Session.urlOf(s) + p, payload && { method: "POST", headers: { "content-type": "application/json", "x-diffotator": "1" }, body: JSON.stringify(payload) }).then((r) => r.json());
+  // The page's key arrives in the link and is kept as a cookie, like a browser would.
+  const cookies = new Map();
+  const page = async (s, p, payload) => {
+    if (!cookies.has(s.pid)) {
+      const r = await fetch(Session.pageUrl(s), { redirect: "manual" });
+      assert.strictEqual(r.status, 302, "the printed link opens the review");
+      cookies.set(s.pid, r.headers.get("set-cookie").split(";")[0]);
+    }
+    const headers = { cookie: cookies.get(s.pid), "content-type": "application/json", "x-diffotator": "1" };
+    return (await fetch(Session.urlOf(s) + p, payload ? { method: "POST", headers, body: JSON.stringify(payload) } : { headers })).json();
+  };
   const gone = async (pid) => {
     for (let i = 0; i < 50; i++) {
       try {
@@ -1964,10 +2013,23 @@ async function sessionLifecycle() {
     return false;
   };
 
+  // `answer`/`wait` after -C is still the command, not a base branch called "wait".
+  assert.throws(
+    () => execFileSync(process.execPath, [path.join(__dirname, "bin", "diffotator.js"), "-C", d, "wait"], { stdio: "pipe", env: process.env }),
+    (e) => /no review is open/.test(String(e.stderr)),
+    "wait with nothing open says so instead of opening a review"
+  );
+
   const s = await Session.ensure(root, {});
   try {
     assert.strictEqual(s.reused, false);
-    assert.strictEqual((fs.statSync(path.join(home, "sessions", fs.readdirSync(path.join(home, "sessions"))[0])).mode & 0o777).toString(8), "600", "only you can read the secret");
+    if (process.platform !== "win32") {
+      const file = path.join(home, "sessions", fs.readdirSync(path.join(home, "sessions")).find((f) => f.endsWith(".json")));
+      assert.strictEqual((fs.statSync(file).mode & 0o777).toString(8), "600", "only you can read the secrets");
+    }
+    // Without the printed link's key, another user on this computer gets nothing.
+    assert.strictEqual((await fetch(Session.urlOf(s) + "/api/thread")).status, 403);
+    assert.strictEqual((await fetch(Session.urlOf(s) + "/")).status, 403, "…and the page says to use the link");
     assert.strictEqual((await Session.ensure(root, {})).pid, s.pid, "asking for nothing rejoins the open review");
 
     await page(s, "/api/ask", { text: "why?" });
@@ -1986,10 +2048,11 @@ async function sessionLifecycle() {
     assert.strictEqual((await Session.alive(root)).pid, s2.pid);
 
     await page(s2, "/api/submit", { decision: "approved", annotations: [] });
-    // Sent but not yet collected: a new review must not rejoin it and read its feedback.
-    const s3 = await Session.ensure(root, { walkthrough: wt });
-    assert.notStrictEqual(s3.pid, s2.pid, "a sent review is never handed to a new one");
-    await page(s3, "/api/submit", { decision: "approved", annotations: [] });
+    // Sent but not yet collected (the agent's command had died): whoever comes
+    // next gets that feedback first, even when asking for something else.
+    const s3 = await Session.ensure(root, {});
+    assert.strictEqual(s3.pid, s2.pid, "a sent review is handed over, not thrown away");
+    assert.strictEqual(s3.finished, true);
     assert.deepStrictEqual(await Session.waitNext(s3), { type: "done", decision: "approved", output: "The user approved." });
     assert.ok(await gone(s3.pid), "collected: the review process leaves");
     assert.strictEqual(Session.read(root), null, "…and takes its session file with it");

@@ -61,9 +61,16 @@ Click it, then **Ask why**.
 
 How it works: the review runs in a small background process. When you ask, the
 agent's `diffotator` command finishes with your question; the agent replies with
-`diffotator answer --id <n> "…"`, which also waits for your next message. Only
-the page can ask (it sends a header other websites can't), and only your agent
-can answer (it holds a secret key stored where only you can read it).
+`diffotator answer --id <n> "…"`, which also waits for your next message. If the
+agent's command was stopped, nothing is lost: questions wait in line, and a
+review you sent is handed to whichever `diffotator` command runs next.
+
+Who can do what: only the page opened from the printed link can ask or send
+(the link carries a key, and every request needs a header other websites can't
+add), and only your agent can answer (it holds a secret stored where only you
+can read it). The review closes itself after 12 hours without use. Reviewing
+through a forwarded port in a cloud editor? Set `DIFFOTATOR_ALLOWED_HOSTS` to
+its host name.
 
 ## What it is
 

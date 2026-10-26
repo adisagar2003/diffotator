@@ -12,15 +12,16 @@
  * it only touches app.js's globals ($, S, esc, lineText…) once the page runs.
  */
 (function () {
-  const A = { items: [], listening: false, seenAt: 0, timer: null, context: null, confidence: null, error: "" };
-  const SEEN_KEY = "diffotator.askSeen"; // answers already read survive a reload
+  const A = { items: [], listening: false, seen: 0, timer: null, context: null, confidence: null, error: "", sending: false };
+  const SEEN_KEY = "diffotator.askSeen"; // how many answers were read; survives a reload
+  const answered = () => A.items.filter((x) => x.answer !== null).length;
   try {
-    A.seenAt = +sessionStorage.getItem(SEEN_KEY) || 0;
+    A.seen = +sessionStorage.getItem(SEEN_KEY) || 0;
   } catch {}
   const markSeen = () => {
-    A.seenAt = Date.now();
+    A.seen = answered();
     try {
-      sessionStorage.setItem(SEEN_KEY, A.seenAt);
+      sessionStorage.setItem(SEEN_KEY, A.seen);
     } catch {}
   };
   const LEVEL = { high: "High", medium: "Medium", low: "Low" };
@@ -69,8 +70,14 @@
     if (isOpen() || pending()) A.timer = setTimeout(refresh, 1500);
   }
 
-  /** Ask now. On failure the question waits in the box with the reason under it. */
+  /**
+   * Ask now. The box is only emptied if it still holds what was sent, so
+   * words typed meanwhile survive; on failure the question goes back in the
+   * box (unless something else is being written there) with the reason under it.
+   */
   async function ask(text, context) {
+    if (A.sending) return;
+    A.sending = true;
     A.error = "";
     $("#askSend").disabled = true;
     try {
@@ -81,15 +88,14 @@
       });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `couldn't ask (${r.status})`);
       open();
-      $("#askBody").value = "";
-      A.context = null;
+      if ($("#askBody").value.trim() === text) ($("#askBody").value = ""), (A.context = null);
       await refresh();
     } catch (e) {
       open();
-      $("#askBody").value = text;
-      A.context = context;
+      if (!$("#askBody").value.trim()) ($("#askBody").value = text), (A.context = context);
       A.error = `Not sent: ${e.message}`;
     } finally {
+      A.sending = false;
       $("#askSend").disabled = false;
       draw();
     }
@@ -128,7 +134,7 @@
   }
 
   function draw() {
-    const unread = A.items.filter((x) => x.answer !== null && x.answeredAt > A.seenAt).length;
+    const unread = Math.max(0, answered() - A.seen);
     if (isOpen()) markSeen();
     $("#askBadge").hidden = isOpen() || !unread;
     $("#askBadge").textContent = unread;
@@ -177,7 +183,7 @@
     });
     // Enter sends, Shift+Enter is a new line; ⌘⏎ here means this box, not the review.
     $("#askBody").addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" || e.shiftKey) return;
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return; // 229: an IME is still composing
       e.preventDefault();
       e.stopPropagation();
       send();
