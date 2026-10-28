@@ -1359,13 +1359,17 @@ function sizePan(contentW) {
      bound, and a conservative gutter errs toward "more scrollable". */
   const gut = 96; // conservative: widest gutter any segment can have
   const visible = (body.clientWidth || 800) / (S.view === "split" ? 2 : 1) - gut;
+  S.panW = contentW;
   S.panMax = Math.max(0, contentW - visible);
-  $("#hscrollInner").style.width = contentW + "px";
+  // The bar's own scroll range has to be exactly panMax, whatever its width.
+  $("#hscrollInner").style.width = `calc(100% + ${S.panMax}px)`;
   bar.classList.toggle("off", S.panMax < 2);
   if (bar.scrollLeft > S.panMax) bar.scrollLeft = S.panMax;
   body.style.setProperty("--hx", -Math.min(bar.scrollLeft, S.panMax) + "px");
 }
 
+// A wider or narrower pane changes how much of each line is hidden.
+new ResizeObserver(() => S.panW != null && sizePan(S.panW)).observe($("#diffBody"));
 $("#hscroll").addEventListener(
   "scroll",
   () => $("#diffBody").style.setProperty("--hx", -$("#hscroll").scrollLeft + "px"),
